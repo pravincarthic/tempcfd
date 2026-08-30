@@ -24,7 +24,7 @@ from pse.parallel import Parallel                                  # noqa: E402
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("config", nargs="?", default="config/mach10_130kft.yaml")
+    ap.add_argument("config", nargs="?", default="config/mach10_130kft.json")
     ap.add_argument("--modes", type=int, default=None)
     ap.add_argument("--stations", type=int, default=61)
     ap.add_argument("--ny", type=int, default=121)

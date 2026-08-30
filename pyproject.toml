@@ -11,7 +11,7 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
 [project.optional-dependencies]
 mpi = ["mpi4py>=3.1"]
-io = ["h5py>=3.8", "pyyaml>=6.0"]
+io = ["h5py>=3.8"]
 plot = ["matplotlib>=3.6"]
 test = ["pytest>=7.0"]
 

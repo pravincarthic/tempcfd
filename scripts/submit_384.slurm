@@ -19,7 +19,7 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OMPI_MCA_btl_vader_single_copy_mechanism=none
 
-CFG=${1:-config/mach10_130kft.yaml}
+CFG=${1:-config/mach10_130kft.json}
 OUT=${2:-results/$SLURM_JOB_ID}
 
 srun --cpu-bind=cores python3 scripts/run_pse.py "$CFG" -o "$OUT"

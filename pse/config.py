@@ -1,12 +1,6 @@
-"""Configuration handling (YAML or JSON)."""
+"""Configuration handling (JSON)."""
 import json
 import numpy as np
-
-try:
-    import yaml
-    HAVE_YAML = True
-except Exception:                                     # pragma: no cover
-    HAVE_YAML = False
 
 DEFAULTS = {
     "case": {
@@ -103,41 +97,10 @@ def load(path=None, overrides=None):
     cfg = {k: dict(v) for k, v in DEFAULTS.items()}
     if path:
         with open(path) as f:
-            txt = f.read()
-        if path.endswith((".yaml", ".yml")):
-            if not HAVE_YAML:
-                raise RuntimeError("pyyaml required for YAML configs")
-            user = yaml.safe_load(txt)
-        else:
-            user = json.loads(txt)
+            user = json.load(f)
         cfg = _merge(cfg, user)
     if overrides:
         cfg = _merge(cfg, overrides)
-    return coerce(cfg)
-
-
-_NUMERIC = {
-    "case": ("mach", "altitude_ft", "half_angle_deg"),
-    "baseflow": ("x_start", "x_end", "n_stations", "ny", "y_max", "y_half",
-                 "y_max_factor", "y_half_factor", "wall_temperature",
-                 "smooth_passes"),
-    "physics": ("lewis", "schmidt", "species_floor"),
-    "modes": ("f_min_hz", "f_max_hz", "n_frequencies", "beta_min", "beta_max",
-              "n_beta", "c_guess"),
-    "pse": ("order", "alpha_tol", "alpha_iter", "min_step_factor",
-            "stabilize", "i_start"),
-    "parallel": ("group_size", "threads"),
-}
-
-
-def coerce(cfg):
-    """YAML 1.1 parses 4.0e4 as a string (no sign in the exponent), so every
-    numeric entry is cast explicitly."""
-    for sec, keys in _NUMERIC.items():
-        for k in keys:
-            v = cfg.get(sec, {}).get(k, None)
-            if isinstance(v, str):
-                cfg[sec][k] = float(v)
     return cfg
 
 
@@ -172,8 +135,5 @@ def schedule_order(modes, mode="center_out"):
 
 def dump(cfg, path):
     with open(path, "w") as f:
-        if HAVE_YAML and path.endswith((".yaml", ".yml")):
-            yaml.safe_dump(cfg, f, sort_keys=False)
-        else:
-            json.dump(cfg, f, indent=2, default=str)
+        json.dump(cfg, f, indent=2, default=str)
     return path

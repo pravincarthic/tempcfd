@@ -9,8 +9,8 @@ strong scaling on ~384 CPU cores.
 ```
 pip install -r requirements.txt
 python3 -m pytest tests -q                     # verification suite
-python3 scripts/run_pse.py config/mach10_130kft.yaml -o results/run1
-mpirun -n 384 python3 scripts/run_pse.py config/mach10_130kft.yaml
+python3 scripts/run_pse.py config/mach10_130kft.json -o results/run1
+mpirun -n 384 python3 scripts/run_pse.py config/mach10_130kft.json
 ```
 
 ## Physical model
@@ -178,11 +178,11 @@ scheduler efficiency and throughput.
 
 ## Configuration
 
-`config/mach10_130kft.yaml` is fully commented; `pse/config.py` holds the
-defaults and coerces numeric strings (YAML 1.1 parses `4.0e4` as a *string* —
-write `40000.0`).  Override from the command line with `-o/--output`,
-`--foam-case`, `--nf`, `--group-size`, or dump the resolved configuration with
-`--dump-config`.
+Configs are plain JSON — `config/mach10_130kft.json` is the shipped example;
+`pse/config.py` holds the defaults, which a config file only needs to
+override in part (missing sections/keys fall back to the defaults).  Override
+from the command line with `-o/--output`, `--foam-case`, `--nf`,
+`--group-size`, or dump the resolved configuration with `--dump-config`.
 
 Outputs land in `output.directory`:
 `pse_modes.h5` (per-mode `x`, `alpha`, growth rate, N-factors, phase speed;

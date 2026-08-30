@@ -1,0 +1,79 @@
+{
+  "case": {
+    "name": "mach10_130kft_cone7",
+    "mach": 10.0,
+    "altitude_ft": 130000.0,
+    "geometry": "cone",
+    "half_angle_deg": 7.0
+  },
+  "baseflow": {
+    "source": "similarity",
+    "foam_case": null,
+    "foam_time": null,
+    "wall_patches": ["wall"],
+    "plane": "axisym",
+    "axis": [1.0, 0.0, 0.0],
+    "field_map": {},
+    "x_start": 0.20,
+    "x_end": 2.00,
+    "n_stations": 181,
+    "ny": 161,
+    "y_max": null,
+    "y_half": null,
+    "y_max_factor": 12.0,
+    "y_half_factor": 1.0,
+    "wall_temperature": 1000.0,
+    "adiabatic_wall": false,
+    "freestream_Y": {"N2": 0.767, "O2": 0.233},
+    "smooth_passes": 1
+  },
+  "physics": {
+    "viscous": true,
+    "reacting": false,
+    "thermal_nonequilibrium": true,
+    "diffusion": true,
+    "lewis": 1.2,
+    "schmidt": null,
+    "low_T_blend": true,
+    "species_floor": 1e-12
+  },
+  "wall_bc": {
+    "thermal": "isothermal",
+    "vibrational": "equilibrium",
+    "catalytic": "noncatalytic"
+  },
+  "modes": {
+    "f_min_hz": 40000.0,
+    "f_max_hz": 320000.0,
+    "n_frequencies": 384,
+    "beta_min": 0.0,
+    "beta_max": 0.0,
+    "n_beta": 1,
+    "frequency_spacing": "linear",
+    "c_guess": 0.92,
+    "schedule": "center_out"
+  },
+  "pse": {
+    "order": 2,
+    "nonparallel": true,
+    "far_field": "asymptotic",
+    "alpha_tol": 1e-8,
+    "alpha_iter": 20,
+    "min_step_factor": 1.0,
+    "stabilize": 0.0,
+    "store_modes": false,
+    "energy_norm": "kinetic",
+    "i_start": 0,
+    "mode_check": true
+  },
+  "parallel": {
+    "group_size": 4,
+    "threads": 1
+  },
+  "output": {
+    "directory": "results/mach10_130kft",
+    "file": "pse_modes.h5",
+    "envelope_csv": "n_factor_envelope.csv",
+    "save_baseflow": true
+  }
+}

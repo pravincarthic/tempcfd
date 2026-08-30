@@ -154,7 +154,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="pse", description="PSE second-Mack-mode solver "
                                 "(11-species Park two-temperature air)")
-    ap.add_argument("config", nargs="?", help="YAML or JSON configuration")
+    ap.add_argument("config", nargs="?", help="JSON configuration")
     ap.add_argument("-o", "--output", help="override output directory")
     ap.add_argument("--foam-case", help="override the OpenFOAM case directory")
     ap.add_argument("--nf", type=int, help="override the number of frequencies")
