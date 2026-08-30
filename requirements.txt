@@ -1,0 +1,7 @@
+numpy>=1.24
+scipy>=1.10
+mpi4py>=3.1        # optional: needed only for multi-rank runs
+h5py>=3.8          # optional: HDF5 output (falls back to .npz)
+pyyaml>=6.0        # optional: YAML configs (JSON works without it)
+matplotlib>=3.6    # optional: scripts/plot_results.py
+pytest>=7.0        # optional: test suite
