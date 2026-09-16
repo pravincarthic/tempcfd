@@ -1,0 +1,85 @@
+{
+ "step_file": "D:\\BWB_git\\BWB_Spaceplane\\Design\\BWB_Spaceplane_V2_20260822.brep",
+ "output_file": "D:\\BWB_git\\BWB_Spaceplane\\Output\\PlainBWB_mesh\\Gmsh_half_AoA_neg5_20260916_coarse.msh",
+ "export_geometry_path": null,
+ "gmsh_parameters": {
+  "Mesh.RandomFactor": 1e-05,
+  "General.NumThreads": 16,
+  "Mesh.MeshSizeMin": 0.2,
+  "Mesh.MeshSizeMax": 4000,
+  "Mesh.MeshSizeFromCurvature": 24,
+  "Mesh.Algorithm": 6,
+  "Mesh.Algorithm3D": "auto",
+  "hxt_element_threshold": 20000000,
+  "Mesh.Smoothing": 5,
+  "Mesh.Optimize": 1,
+  "Mesh.OptimizeNetgen": 1,
+  "Mesh.OptimizeThreshold": 0.3,
+  "quality_abort_threshold": 0.01,
+  "Mesh.ElementOrder": 1,
+  "Mesh.MshFileVersion": 2.2,
+  "General.Terminal": 1
+ },
+ "geometry_parameters": {
+  "rotation_angle_deg": -5,
+  "rotation_by_CoM": false,
+  "test_for_CoM_only": false,
+  "uniform_dilation_factor": 1000.0,
+  "enable_symmetry_half_model": false,
+  "symmetry_plane_y_mm": 0.0,
+  "symmetry_keep_positive_side": true,
+  "far_field_x0_mm": -20000,
+  "far_field_length_mm": 110000,
+  "far_field_r_envelope_mm": 40000,
+  "far_field_face_tolerance_mm": 0.5,
+  "two_stage_half_cut": true,
+  "dump_face_classification": true,
+  "allow_full_model_fallback": true,
+  "min_cut_volume_fraction": 1e-09
+ },
+ "size_field_parameters": {
+  "size_near": 120.0,
+  "size_far": 2500.0,
+  "dist_min": 500,
+  "dist_max": 10000,
+  "min_sampling": 20,
+  "max_sampling": 400,
+  "cavity_size": 1.0,
+  "cavity_dist_max": 50,
+  "cavity_surface_tags": []
+ },
+ "nose_refinement_parameters": {
+  "enable": true,
+  "length_fraction": 0.12,
+  "lateral_pad_mm": 500,
+  "size_mm": 100.0,
+  "transition_thickness_mm": 2000
+ },
+ "shock_box_parameters": {
+  "enable": false,
+  "mach_number": 10.0,
+  "safety_factor": 2.5,
+  "nose_upstream_pad_mm": 2000,
+  "size_in_mm": 100,
+  "transition_thickness_mm": 2000
+ },
+ "boundary_layer_parameters": {
+  "enable": true,
+  "Size": 0.05,
+  "Thickness": 19.55,
+  "Ratio": 1.1112,
+  "NbLayers": 25
+ },
+ "su2_marker_names": {
+  "wall": "wall",
+  "symmetry": "symmetry",
+  "farfield": "farfield"
+ },
+ "utility_parameters": {
+  "su2_dilation_factor": 0.001,
+  "enable_su2_export": true,
+  "surface_mesh_only": false,
+  "max_element_budget": 400000000.0,
+  "abort_on_bad_quality": true
+ }
+}

@@ -619,10 +619,16 @@ def report_quality_mixed(threshold):
     return True
 
 
-def create_mesh(config_file='gmsh_config.json'):
+def create_mesh(config_file='gmsh_config.json', dry_run=False):
     config = load_config(config_file)
     if config is None:
         return False
+
+    dry_run = dry_run or config.get('utility_parameters', {}).get('dry_run', False)
+    if dry_run:
+        print("DRY RUN: will build the surface mesh and prism layers (if "
+              "enabled) to get real counts, then stop before the 3D tet fill "
+              "and export. No .msh or .su2 written.\n")
 
     step_file = config.get('step_file')
     output_path = config.get('output_file')
@@ -1296,6 +1302,32 @@ def create_mesh(config_file='gmsh_config.json'):
             print(f"  Fluid is now {len(bl_volumes)} prism block(s) plus the "
                   f"tet region\n")
 
+    if dry_run:
+        # extrudeBoundaryLayer only builds the geometric entities; the prism
+        # elements themselves are not realized until generate(3), which is the
+        # same call that fills the tets. So there is no "real" prism count to
+        # read back here that is cheaper than just running the tet fill. What
+        # dry-run buys instead: the surface mesh is real (not estimated), the
+        # prism budget above is an exact count from that real mesh (not the
+        # estimate the pre-flight check uses), and on a half model the
+        # symmetry plane rebuild has actually run and would have raised by now
+        # if the layers do not fit the geometry. Only the tet fill stays an
+        # estimate.
+        try:
+            et, eg, _ = gmsh.model.mesh.getElements(2)
+            n_surf = sum(len(g) for g in eg)
+        except Exception:
+            n_surf = 0
+        print(f"DRY RUN stopping here. Real surface mesh: {n_surf} elements.")
+        if bl_enabled:
+            print(f"  Prism count above ({n_prism:.3e}) is exact, from this "
+                  "real surface mesh, not the pre-flight estimate.")
+        print("  Tet fill is still only the pre-flight estimate above -- that "
+              "part has not run. Remove dry_run (or --dry-run) to generate "
+              "it.\n")
+        gmsh.finalize()
+        return True
+
     print("Generating 3D mesh...")
     try:
         gmsh.model.mesh.generate(3)
@@ -1364,5 +1396,7 @@ def create_mesh(config_file='gmsh_config.json'):
 
 
 if __name__ == "__main__":
-    cfg = sys.argv[1] if len(sys.argv) > 1 else 'gmsh_config.json'
-    sys.exit(0 if create_mesh(cfg) else 1)
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    flags = [a for a in sys.argv[1:] if a.startswith('--')]
+    cfg = args[0] if args else 'gmsh_config.json'
+    sys.exit(0 if create_mesh(cfg, dry_run='--dry-run' in flags) else 1)
