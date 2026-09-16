@@ -418,6 +418,73 @@ def bl_heights(bl_params):
     return heights
 
 
+
+def group_curves_into_loops(curves):
+    """
+    Group a flat set of curve tags into closed loops by shared end points.
+
+    addCurveLoop needs one loop at a time: handed the curves of two disjoint
+    loops it reports "Curve loop N is wrong". A body can meet the symmetry
+    plane in more than one closed silhouette, so the curves have to be sorted
+    into loops before any of them can be used.
+    """
+    ends = {}
+    for c in curves:
+        pts = tuple(sorted(t for d, t in gmsh.model.getBoundary(
+            [(1, c)], combined=False, oriented=False)))
+        ends[c] = pts
+
+    remaining = set(curves)
+    loops = []
+    while remaining:
+        seed = remaining.pop()
+        loop = [seed]
+        touched = set(ends[seed])
+        grew = True
+        while grew:
+            grew = False
+            for c in list(remaining):
+                if touched & set(ends[c]):
+                    loop.append(c)
+                    touched |= set(ends[c])
+                    remaining.discard(c)
+                    grew = True
+        loops.append(loop)
+    return loops
+
+
+def rebuild_symmetry_plane(sym_outer_curves, strip_outer_curves):
+    """
+    Rebuild the symmetry plane as a surface with the prism strip cut out.
+
+    Where the body meets the symmetry plane, the prism blocks occupy a strip of
+    that plane. The original symmetry face spans the whole cross section, strip
+    included, so meshing it and then extruding gives two surfaces over the same
+    area and generate(3) is handed a self-intersecting boundary.
+
+    The fix is ordering plus a hole: the symmetry face is removed before the
+    surface mesh is built, the layers are extruded, and the plane is then
+    rebuilt from the domain outline with the outer edge of the strip as an
+    interior boundary. The strip itself stays covered by the extrusion's own
+    lateral faces, which carry the symmetry marker.
+
+    Returns the new surface tags.
+    """
+    outer_loops = group_curves_into_loops(sym_outer_curves)
+    hole_loops = group_curves_into_loops(strip_outer_curves)
+    print(f"  Symmetry plane: {len(outer_loops)} outline loop(s), "
+          f"{len(hole_loops)} strip loop(s) to cut out")
+
+    holes = [gmsh.model.geo.addCurveLoop(l, reorient=True) for l in hole_loops]
+    surfaces = []
+    for outline in outer_loops:
+        loop = gmsh.model.geo.addCurveLoop(outline, reorient=True)
+        surfaces.append(gmsh.model.geo.addPlaneSurface([loop] + holes))
+    gmsh.model.geo.synchronize()
+    print(f"  Rebuilt symmetry surface(s): {surfaces}")
+    return surfaces
+
+
 def build_prism_layers(wall_faces, farfield_faces, symmetry_faces, bl_params,
                        sym_coord, tol, heights=None):
     """
@@ -460,22 +527,42 @@ def build_prism_layers(wall_faces, farfield_faces, symmetry_faces, bl_params,
             else:
                 laterals.append(tag)
 
+    # A lateral shared by two neighbouring blocks appears twice in the return
+    # and is internal. One appearing once sits on the open edge of the wall
+    # patch set, which on a half model is the symmetry plane. This is a
+    # topological test: the laterals have no mesh yet, so their coordinates
+    # cannot be queried here.
+    seen = {}
+    for tag in laterals:
+        seen[tag] = seen.get(tag, 0) + 1
+    exterior = [tag for tag, n in seen.items() if n == 1]
+
     print(f"  Extruded {len(wall_faces)} wall face(s) into {len(vols)} prism "
-          f"block(s): {len(tops)} top surfaces, {len(laterals)} lateral")
+          f"block(s): {len(tops)} tops, {len(seen)} laterals "
+          f"({len(exterior)} exterior)")
 
-    # A lateral face lying in the symmetry plane is part of the symmetry
-    # boundary, not an internal face, so it has to carry the symmetry marker.
-    sym_laterals = []
-    if symmetry_faces:
-        for tag in laterals:
-            bb = gmsh.model.getBoundingBox(2, tag)
-            if abs(bb[1] - sym_coord) < tol and abs(bb[4] - sym_coord) < tol:
-                sym_laterals.append(tag)
-        if sym_laterals:
-            print(f"  {len(sym_laterals)} lateral face(s) lie in the symmetry "
-                  "plane and are added to the symmetry marker.")
+    sym_laterals = exterior if symmetry_faces else []
+    if sym_laterals:
+        print(f"  {len(sym_laterals)} lateral face(s) lie in the symmetry "
+              "plane and take the symmetry marker.")
 
-    return True, tops + farfield_faces, vols, sym_laterals
+    # Outer edge of the symmetry strip: curves used once across the exterior
+    # laterals and not part of the original wall boundary. This is the hole the
+    # rebuilt symmetry plane is cut around.
+    strip_curves = []
+    if sym_laterals:
+        wall_edges = set(t for d, t in gmsh.model.getBoundary(
+            [(2, f) for f in wall_faces], combined=False, oriented=False))
+        counts = {}
+        for tag in sym_laterals:
+            for d, c in gmsh.model.getBoundary([(2, tag)], combined=False,
+                                               oriented=False):
+                counts[c] = counts.get(c, 0) + 1
+        strip_curves = [c for c, n in counts.items()
+                        if n == 1 and c not in wall_edges]
+        print(f"  Strip outer edge: {len(strip_curves)} curve(s)")
+
+    return True, tops + farfield_faces, vols, sym_laterals, strip_curves
 
 
 def report_quality_mixed(threshold):
@@ -993,20 +1080,16 @@ def create_mesh(config_file='gmsh_config.json'):
     # boundary-layer-capable mesher, or to accept a wall-resolved isotropic
     # near-wall size and the cell count that implies.
     bl_enabled = bl_params.get("enable", False)
-    if bl_enabled and symmetry_faces:
-        print("Boundary layer DISABLED: this is a symmetry half model.\n"
-              "  The prism block occupies a strip of the symmetry plane, but "
-              "that plane was already surface meshed as a whole, so the two "
-              "overlap and generate(3) would be fed a self-intersecting "
-              "boundary. This is not handled here.\n"
-              "  Run full span (enable_symmetry_half_model false) to use prism "
-              "layers, or leave the layers off.\n")
-        bl_enabled = False
+    bl_half = bl_enabled and bool(symmetry_faces)
     if bl_enabled:
         print("Boundary layer: prism layers will be extruded after the surface "
               "mesh, using gmsh.model.geo.extrudeBoundaryLayer.")
         print("  Note this is not the BoundaryLayer size field, which is 2D "
-              "only and aborts generate(3).\n")
+              "only and aborts generate(3).")
+        if bl_half:
+            print("  Half model: the symmetry plane is removed before meshing "
+                  "and rebuilt afterwards with the prism strip cut out.")
+        print()
 
     # 10. Pre-flight element budget
     estimated, volume_m3 = estimate_elements(domain, body_bbox, size_params,
@@ -1039,6 +1122,50 @@ def create_mesh(config_file='gmsh_config.json'):
 
     # 12. Generate, 2D first so nose resolution can be judged cheaply
     surface_only = util_params.get("surface_mesh_only", False)
+
+    # The pre-layer volume is replaced by the prism blocks plus the tet region.
+    # Left in the model it is meshed a second time alongside them, doubling
+    # elements and memory, so it goes before any meshing happens. On a half
+    # model the symmetry face goes too: it must not be meshed over the strip
+    # the layers are about to occupy. Both are rebuilt after the extrusion.
+    sym_outer_curves = []
+    if bl_enabled and not surface_only:
+        if bl_half:
+            sym_outer_curves = [
+                t for d, t in gmsh.model.getBoundary(
+                    [(2, f) for f in symmetry_faces], combined=False,
+                    oriented=False)]
+            wall_edges = set(t for d, t in gmsh.model.getBoundary(
+                [(2, f) for f in wall_faces], combined=False, oriented=False))
+            sym_outer_curves = [c for c in sym_outer_curves
+                                if c not in wall_edges]
+        # The old symmetry group has to be identified before its entities go:
+        # once they are removed it stops appearing in getPhysicalGroups, yet it
+        # keeps its name reserved, and the rebuilt plane then cannot be given
+        # that name. It ends up in the .su2 as PhysicalSurface<n> instead.
+        old_sym_group = None
+        if bl_half:
+            for dim, tag in gmsh.model.getPhysicalGroups(2):
+                if gmsh.model.getPhysicalName(2, tag) == sym_name:
+                    old_sym_group = (dim, tag)
+                    break
+        try:
+            gmsh.model.removeEntities([(3, t) for t in fluid_volume_tags])
+            if bl_half:
+                if old_sym_group:
+                    gmsh.model.removePhysicalGroups([old_sym_group])
+                gmsh.model.removeEntities([(2, f) for f in symmetry_faces])
+                print(f"Removed the symmetry face(s) {symmetry_faces} before "
+                      f"meshing, outline kept as {len(sym_outer_curves)} "
+                      "curve(s)")
+            print(f"Removed the pre-layer fluid volume(s) {fluid_volume_tags}, "
+                  "superseded by the layers\n")
+        except Exception as e:
+            print(f"Could not clear the pre-layer entities: {e}")
+            print("  Disabling the boundary layer rather than meshing the "
+                  "domain twice.\n")
+            bl_enabled = bl_half = False
+
     print("Generating 2D surface mesh...")
     try:
         gmsh.model.mesh.generate(2)
@@ -1073,9 +1200,8 @@ def create_mesh(config_file='gmsh_config.json'):
     bl_volumes, sym_laterals = [], []
     if bl_enabled:
         # Prism count is wall triangles times layers, known exactly now that
-        # the surface mesh exists. This is the number that actually decides
-        # whether a viscous mesh fits, and it is usually far larger than the
-        # tet estimate made before meshing.
+        # the surface mesh exists. This is the number that decides whether a
+        # viscous mesh fits, and it dwarfs the tet estimate made before meshing.
         n_wall_tri = 0
         for f in wall_faces:
             try:
@@ -1097,64 +1223,56 @@ def create_mesh(config_file='gmsh_config.json'):
 
         print("Extruding prism boundary layer...")
         try:
-            ok, outer, bl_volumes, sym_laterals = build_prism_layers(
-                wall_faces, farfield_faces, symmetry_faces, bl_params,
-                sym_coord, tol, heights=heights_preview)
+            ok, outer, bl_volumes, sym_laterals, strip_curves = \
+                build_prism_layers(wall_faces, farfield_faces, symmetry_faces,
+                                   bl_params, sym_coord, tol,
+                                   heights=heights_preview)
         except Exception as e:
             print(f"Boundary layer extrusion failed: {e}")
-            print("  The wall mesh is unchanged, so rerun with "
-                  "boundary_layer_parameters.enable false for an all-tet mesh.")
             gmsh.finalize()
             return False
 
         if ok:
             try:
+                if bl_half:
+                    if not strip_curves:
+                        raise RuntimeError(
+                            "no strip edge found on the symmetry plane, so the "
+                            "plane cannot be rebuilt around the layers")
+                    new_sym = rebuild_symmetry_plane(sym_outer_curves,
+                                                     strip_curves)
+                    # the rebuilt plane still needs its own surface mesh
+                    gmsh.model.mesh.generate(2)
+                    outer = outer + new_sym
+
                 loop = gmsh.model.geo.addSurfaceLoop(outer)
                 outer_volume = gmsh.model.geo.addVolume([loop])
                 gmsh.model.geo.synchronize()
+
+                # After the synchronize, not before: a group created earlier
+                # comes back unnamed and SU2 gets a marker called
+                # PhysicalSurface<n> instead of the configured name.
+                if bl_half:
+                    gtag = gmsh.model.addPhysicalGroup(2, new_sym + sym_laterals)
+                    gmsh.model.setPhysicalName(2, gtag, sym_name)
+                    print(f"  Symmetry marker '{sym_name}': {len(new_sym)} "
+                          f"rebuilt surface(s) plus {len(sym_laterals)} strip "
+                          "face(s)")
             except Exception as e:
                 print(f"Could not close the outer volume: {e}")
                 gmsh.finalize()
                 return False
 
-            # The original cut volume still spans the whole fluid region. Left
-            # in the model it is meshed a second time, in parallel with the
-            # prism blocks and the tet region that replace it: the element
-            # count and the memory double, and the physical group hides it by
-            # excluding those elements from the export. Remove it before
-            # generate(3).
-            try:
-                gmsh.model.removeEntities([(3, t) for t in fluid_volume_tags])
-                print(f"  Removed the pre-layer fluid volume(s) "
-                      f"{fluid_volume_tags}, now superseded")
-            except Exception as e:
-                print(f"  Warning: could not remove the pre-layer volume(s): {e}")
-                print("    The domain will be meshed twice, doubling cost.")
-
-            # The fluid is now the prism blocks plus the tet region.
             fluid_volume_tags = bl_volumes + [outer_volume]
-            # removeEntities above already dropped the old volume group from
-            # the listing, but gmsh still holds its physical tag reserved, so
-            # reusing tag 7 raises "Physical volume 7 already exists". Let gmsh
-            # assign the tag; SU2 keys off the name, not the number.
-            # Guard the empty case: gmsh treats removePhysicalGroups([]) as
-            # "remove every group", which silently takes the wall and farfield
-            # markers with it and writes a .su2 with no NMARK section at all.
+            # gmsh reads removePhysicalGroups([]) as "remove every group", which
+            # silently takes the wall and farfield markers with it and writes a
+            # .su2 with no NMARK section, so guard the empty case.
             stale = gmsh.model.getPhysicalGroups(3)
             if stale:
                 gmsh.model.removePhysicalGroups(stale)
             gmsh.model.addPhysicalGroup(3, fluid_volume_tags, -1, "fluid")
-            if sym_laterals:
-                for dim, tag in gmsh.model.getPhysicalGroups(2):
-                    if gmsh.model.getPhysicalName(2, tag) == sym_name:
-                        merged = list(set(
-                            gmsh.model.getEntitiesForPhysicalGroup(2, tag).tolist()
-                            + sym_laterals))
-                        gmsh.model.removePhysicalGroups([(2, tag)])  # non-empty, safe
-                        gmsh.model.addPhysicalGroup(2, merged, name=sym_name)
-                        break
             print(f"  Fluid is now {len(bl_volumes)} prism block(s) plus the "
-                  f"tet region, volume(s) {fluid_volume_tags}\n")
+                  f"tet region\n")
 
     print("Generating 3D mesh...")
     try:
