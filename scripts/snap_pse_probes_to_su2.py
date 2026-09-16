@@ -54,6 +54,28 @@ FIELDS = ["PRESSURE", "TEMPERATURE", "DENSITY"]
 # VTK element type -> node count, for surface elements
 SURF_TYPE_NODES = {3: 2, 5: 3, 9: 4}
 
+# The mesh config is the normal way to run this, so it is the default rather
+# than something to remember on the command line. Forgetting it silently
+# measured stations along the mesh axis instead of the body axis.
+DEFAULT_CONFIG = "gmsh_config.json"
+
+
+def resolve_config(arg):
+    """Locate the config, searching the working directory then the script dir."""
+    if arg is None or str(arg).lower() == "none":
+        return None
+    if os.path.exists(arg):
+        return arg
+    if arg == DEFAULT_CONFIG:
+        beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), arg)
+        if os.path.exists(beside):
+            return beside
+        print("No %s found in the working directory or beside the script. "
+              "Running without it: pass --config explicitly, or 'none' to "
+              "silence this." % DEFAULT_CONFIG)
+        return None
+    raise FileNotFoundError(arg)
+
 
 # ----------------------------------------------------------------------
 # Mesh workflow configuration
@@ -395,9 +417,11 @@ def main():
     ap.add_argument("mesh")
     ap.add_argument("marker", nargs="?", default=None,
                     help="wall marker name; defaults to the config value or 'wall'")
-    ap.add_argument("--config", default=None,
-                    help="gmsh_config.json used to build the mesh, for the "
-                         "marker name, angle of attack, units and symmetry cut")
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help="gmsh config used to build the mesh, for the marker "
+                         "name, angle of attack, units and symmetry cut. "
+                         "Defaults to %s next to the script or in the working "
+                         "directory; pass 'none' to disable" % DEFAULT_CONFIG)
     ap.add_argument("--aoa", type=float, default=None,
                     help="rotation_angle_deg about Y applied to the geometry; "
                          "overrides the config value")
@@ -418,11 +442,10 @@ def main():
     cfg = {"marker": "wall", "aoa_deg": 0.0, "rotation_by_com": False,
            "scale": 1.0, "sym_y": 0.0, "half_model": False,
            "keep_positive": True}
-    if args.config:
-        if not os.path.exists(args.config):
-            raise FileNotFoundError(args.config)
-        cfg.update(load_mesh_config(args.config))
-        print("Mesh config: %s" % args.config)
+    config_path = resolve_config(args.config)
+    if config_path:
+        cfg.update(load_mesh_config(config_path))
+        print("Mesh config: %s" % config_path)
 
     marker = args.marker or cfg["marker"]
     aoa = cfg["aoa_deg"] if args.aoa is None else args.aoa
@@ -432,7 +455,7 @@ def main():
     if scale <= 0.0:
         raise ValueError("scale must be positive, got %g" % scale)
 
-    if aoa == 0.0 and args.config is None and args.aoa is None:
+    if aoa == 0.0 and config_path is None and args.aoa is None:
         print("WARNING: no config and no --aoa, so stations are measured along "
               "the mesh x axis. If the geometry was rotated for angle of "
               "attack, station x is wrong by roughly x*(1-cos) + z*sin, which "
