@@ -19,9 +19,23 @@ Updated for the current gmsh workflow (final_meshing.py + gmsh_config.json):
     uniform_dilation_factor on the geometry, so station units are converted
     with the same net factor
 
+  - --mack2 adds a tight streamwise cluster of probes around each primary
+    station, spaced to the LOCAL second Mack-mode wavelength rather than a
+    fixed distance. A single point per station gives an N-factor
+    cross-check against the PSE output; it cannot recover a wavelength or
+    phase speed from the CFD signal itself, and the second-mode wavelength
+    varies by roughly two orders of magnitude from nose to tail on this
+    body (millimetres near the nose, tens of millimetres aft), so no
+    single fixed spacing covers both ends. The cluster spacing is worked
+    out per station from a laminar flat-plate boundary-layer estimate at
+    the given flight condition, reusing this repo's pse.atmosphere for the
+    freestream state.
+
 Usage:
     python snap_pse_probes_to_su2.py mesh.su2 --config gmsh_config.json
     python snap_pse_probes_to_su2.py mesh.su2 wall --aoa -5 --half-side +
+    python snap_pse_probes_to_su2.py mesh.su2 --config gmsh_config.json \
+        --mack2 --mach 10 --altitude-ft 130000 --wall-temp 1000
 """
 
 import argparse
@@ -75,6 +89,83 @@ def resolve_config(arg):
               "silence this." % DEFAULT_CONFIG)
         return None
     raise FileNotFoundError(arg)
+
+
+# ----------------------------------------------------------------------
+# Second Mack-mode local wavelength, for probe clustering
+# ----------------------------------------------------------------------
+def edge_conditions(mach, altitude_ft):
+    """
+    Freestream state at the flight condition, reused from this repo's own
+    atmosphere model (pse.atmosphere) rather than reimplemented here, so the
+    numbers match what the PSE solver itself uses. Falls back to a request
+    for explicit freestream values if the pse package is not importable from
+    wherever this script is run (e.g. copied out to a bare post-processing
+    box without the rest of the repo).
+    """
+    try:
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(
+            os.path.abspath(__file__)), ".."))
+        from pse import atmosphere as atmo
+        fs = atmo.freestream(mach, z_ft=altitude_ft)
+        return dict(Ue=fs["U"], rhoe=fs["rho"], mue=fs["mu"], Te=fs["T"],
+                   pe=fs["p"])
+    except Exception as e:
+        raise RuntimeError(
+            "Could not get freestream conditions from pse.atmosphere (%s). "
+            "--mack2 needs the flight condition to size the probe cluster. "
+            "Run this from inside the repo, or pass --Uinf/--rhoinf/--muinf/"
+            "--Tinf/--pinf directly." % e)
+
+
+def sutherland_mu(T):
+    """Sutherland's law for air viscosity, Pa.s, T in Kelvin."""
+    return 1.716e-5 * (T / 273.15) ** 1.5 * (273.15 + 110.4) / (T + 110.4)
+
+
+def local_wavelength(x_m, edge, wall_temp_K, recovery=0.85, gamma=1.4,
+                     gas_R=287.0):
+    """
+    Local second Mack-mode wavelength at station x, from a laminar
+    compressible flat-plate boundary-layer estimate (Eckert reference
+    temperature method).
+
+    The second mode is a trapped acoustic wave with wavelength close to
+    twice the local boundary-layer thickness and frequency f ~ 0.8 Ue / (2
+    delta) (Mack 1984). This is an order-of-magnitude sizing tool for probe
+    spacing, not a stability calculation -- the real growth rate and
+    wavenumber come from the PSE solve itself. A shock-heated boundary layer
+    downstream of the bow shock will be thinner than this predicts, so
+    treat delta here as an upper bound and the wavelength as a not-finer-
+    than spacing.
+
+    Returns (delta_m, wavelength_m, f2_Hz).
+    """
+    Ue, rhoe, mue, Te = edge["Ue"], edge["rhoe"], edge["mue"], edge["Te"]
+    mach = Ue / np.sqrt(gamma * gas_R * Te)
+
+    Tr = Te * (1.0 + recovery * (gamma - 1.0) / 2.0 * mach ** 2)
+    Tstar = Te + 0.5 * (wall_temp_K - Te) + 0.22 * (Tr - Te)
+    mustar = sutherland_mu(Tstar)
+    rhostar = edge["pe"] / (gas_R * Tstar)
+    Cstar = (rhostar * mustar) / (rhoe * mue)
+
+    Rex = rhoe * Ue * x_m / mue
+    delta = 5.0 * x_m * np.sqrt(Cstar) / np.sqrt(max(Rex, 1.0))
+    wavelength = 2.0 * delta
+    f2 = 0.8 * Ue / wavelength
+    return delta, wavelength, f2
+
+
+def cluster_offsets(n_per_wavelength):
+    """
+    Symmetric integer offsets in units of dx = wavelength / n_per_wavelength,
+    covering just under one wavelength around the primary station (which
+    stays as offset 0, so it is unchanged when --mack2 is off).
+    """
+    half = n_per_wavelength // 2
+    return [k for k in range(-half, half + 1) if k != 0]
 
 
 # ----------------------------------------------------------------------
@@ -329,7 +420,17 @@ def mirror_target(x, y, sym_y, keep_positive):
 
 
 def build_probe_definitions(coords, normals, offset, tol,
-                            half_model, keep_positive, sym_y):
+                            half_model, keep_positive, sym_y,
+                            mack2=None):
+    """
+    mack2, when not None, is a dict with edge conditions and clustering
+    parameters (wall_temp_K, recovery, n_per_wavelength, min_dx). Each
+    primary streamwise station then gets extra probes on either side of it,
+    spaced to the local second-mode wavelength at that x, so the cluster can
+    resolve the wave in the CFD signal instead of only sampling one point on
+    it. Spanwise stations are left as single points: they check spanwise
+    mode structure at a fixed x, not the streamwise wave.
+    """
     wind_mask, leew_mask = split_surfaces(coords, normals)
     if not wind_mask.any() or not leew_mask.any():
         raise ValueError("Failed to identify both windward and leeward nodes")
@@ -353,11 +454,57 @@ def build_probe_definitions(coords, normals, offset, tol,
             return
         probes.append((tag, pt, dist))
 
+    def add_station(tag, tree, c, n, x, centreline):
+        n_before = len(probes)
+        add(tag, tree, c, n, [x, centreline])
+        if mack2 is None:
+            return
+        delta, wavelength, f2 = local_wavelength(
+            x, mack2["edge"], mack2["wall_temp_K"], mack2["recovery"])
+        dx = max(wavelength / mack2["n_per_wavelength"], mack2["min_dx"])
+
+        # If the surface mesh is coarser than dx, distinct cluster targets
+        # snap to the same node and the cluster silently collapses to
+        # duplicate probes -- no error, just wasted output entries that all
+        # read the same signal. Checked against the actual snapped points,
+        # not the mesh size, since that is what determines the outcome.
+        seen_pts = ([probes[n_before][1]] if len(probes) > n_before else [])
+        collapsed = 0
+        for k in cluster_offsets(mack2["n_per_wavelength"]):
+            xc = x + k * dx
+            if xc <= 0:
+                continue
+            n_pre = len(probes)
+            add("%s_C%+d" % (tag, k), tree, c, n, [xc, centreline])
+            if len(probes) > n_pre:
+                pt = probes[-1][1]
+                if any(np.allclose(pt, p, atol=1e-9) for p in seen_pts):
+                    collapsed += 1
+                seen_pts.append(pt)
+
+        n_added = len(probes) - n_before
+        print("  %-10s x=%6.2fm  delta~%.2fmm  lambda~%.2fmm  f2~%.1fkHz  "
+              "cluster dx=%.2fmm (%d points requested)"
+              % (tag, x, delta * 1e3, wavelength * 1e3, f2 / 1e3, dx * 1e3,
+                 len(cluster_offsets(mack2["n_per_wavelength"])) + 1))
+        if collapsed:
+            print("    Warning: %d of %d cluster point(s) landed on a node "
+                  "already used by another point in this cluster -- the "
+                  "surface mesh here is coarser than the requested %.2fmm "
+                  "spacing. Those probes read the same signal and add "
+                  "nothing; wall_tangential resolution needs to be finer "
+                  "than the second-mode wavelength for the cluster to work."
+                  % (collapsed, n_added - 1, dx * 1e3))
+
     centreline = sym_y if half_model else 0.0
+    if mack2 is not None:
+        print("Second Mack-mode cluster: laminar boundary-layer estimate, "
+              "shock heating not included, so treat these as upper bounds "
+              "on delta/lambda and a not-finer-than spacing:")
     for i, x in enumerate(X_STATIONS):
-        add("WIND_%02d" % i, tree_wind, wind_c, wind_n, [x, centreline])
+        add_station("WIND_%02d" % i, tree_wind, wind_c, wind_n, x, centreline)
     for i, x in enumerate(X_STATIONS):
-        add("LEEW_%02d" % i, tree_leew, leew_c, leew_n, [x, centreline])
+        add_station("LEEW_%02d" % i, tree_leew, leew_c, leew_n, x, centreline)
     for i, (x, y) in enumerate(SPANWISE_STATIONS):
         if half_model:
             x, y, was_mirrored = mirror_target(x, y, sym_y, keep_positive)
@@ -433,10 +580,34 @@ def main():
     ap.add_argument("--offset", type=float, default=0.0,
                     help="offset above the wall along the outward nodal "
                          "normal, in mesh units (metres). Positive moves into "
-                         "the fluid; keep it below the first cell height")
+                         "the fluid; keep it below the first cell height. "
+                         "Leave at 0 for second-mode work: |p-hat| peaks at "
+                         "the wall for the trapped acoustic mode")
     ap.add_argument("--tol", type=float, default=0.5,
                     help="max allowed x-y snap distance before a station is dropped")
     ap.add_argument("--out", default=None, help="write the config block to a file")
+    ap.add_argument("--mack2", action="store_true",
+                    help="add a streamwise probe cluster around each primary "
+                         "station, spaced to the local second Mack-mode "
+                         "wavelength, to resolve the wave in the CFD signal "
+                         "rather than sample one point on it")
+    ap.add_argument("--mach", type=float, default=10.0,
+                    help="freestream Mach number, for the mack2 cluster sizing")
+    ap.add_argument("--altitude-ft", type=float, default=130000.0,
+                    help="flight altitude in feet, for the mack2 cluster sizing")
+    ap.add_argument("--wall-temp", type=float, default=1000.0,
+                    help="wall temperature in Kelvin, for the mack2 cluster "
+                         "sizing (matches wall_bc.wall_temperature in the PSE "
+                         "config, not necessarily the CFD wall BC)")
+    ap.add_argument("--recovery-factor", type=float, default=0.85,
+                    help="recovery factor for the reference-temperature "
+                         "boundary-layer estimate used by mack2")
+    ap.add_argument("--n-per-wavelength", type=int, default=6,
+                    help="mack2 cluster points per local wavelength")
+    ap.add_argument("--min-cluster-dx", type=float, default=1e-4,
+                    help="floor on mack2 cluster spacing in metres, so a "
+                         "vanishing wavelength near the nose does not request "
+                         "probes finer than the mesh can resolve")
     args = ap.parse_args()
 
     cfg = {"marker": "wall", "aoa_deg": 0.0, "rotation_by_com": False,
@@ -489,10 +660,40 @@ def main():
     _, _, half_model, keep_positive = report_geometry(
         body_coords, sym_y / scale, cfg["half_model"])
 
+    mack2 = None
+    if args.mack2:
+        edge = edge_conditions(args.mach, args.altitude_ft)
+        mack2 = {"edge": edge, "wall_temp_K": args.wall_temp,
+                 "recovery": args.recovery_factor,
+                 "n_per_wavelength": args.n_per_wavelength,
+                 "min_dx": args.min_cluster_dx / scale}
+        print("mack2 enabled: Mach %.1f, altitude %.0fft, wall %.0fK -> "
+              "Ue=%.0fm/s Te=%.1fK rhoe=%.4gkg/m3"
+              % (args.mach, args.altitude_ft, args.wall_temp, edge["Ue"],
+                 edge["Te"], edge["rhoe"]))
+
     probes, rejected = build_probe_definitions(
         body_coords, body_normals, args.offset / scale, args.tol / scale,
-        half_model, keep_positive, sym_y / scale)
+        half_model, keep_positive, sym_y / scale, mack2=mack2)
     report_probes(probes, rejected, args.tol / scale, to_mesh)
+
+    if mack2 is not None:
+        # Nyquist against the highest second-mode frequency, at the most
+        # upstream primary station: that is where delta is smallest and f2
+        # is highest. Undersampling here aliases the very feature the
+        # cluster exists to resolve.
+        _, _, f2_max = local_wavelength(min(X_STATIONS), mack2["edge"],
+                                        mack2["wall_temp_K"],
+                                        mack2["recovery"])
+        nyquist_dt = 1.0 / (2.0 * f2_max)
+        practical_dt = nyquist_dt / 10.0
+        print("\nHighest expected second-mode frequency (at x=%.2fm): "
+              "%.1fkHz." % (min(X_STATIONS), f2_max / 1e3))
+        print("  Nyquist needs an output time step below %.3e s. In "
+              "practice resolve the wave, not just avoid aliasing: aim for "
+              "10x oversampling, dt <~ %.3e s, and write CUSTOM history "
+              "every physical time step at that rate."
+              % (nyquist_dt, practical_dt))
 
     snippet, n_entries = generate_config_snippet(probes, to_mesh)
     print("\nGenerated %d custom outputs from %d probes."
