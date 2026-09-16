@@ -287,8 +287,12 @@ def snap(tree, subset_coords, subset_normals, target_xy, offset):
     dist, idx = tree.query(target_xy)
     pt = subset_coords[idx]
     if offset != 0.0:
-        # Move inward, opposite the outward normal, off the boundary face
-        pt = pt - offset * subset_normals[idx]
+        # Step off the wall along the outward normal, into the fluid. A probe
+        # sitting exactly on a boundary face is ambiguous: SU2 interpolates it
+        # from whichever cell claims the point, so it can return the wall
+        # boundary state rather than the first cell state. Normals are oriented
+        # outward before this, so a positive offset always moves into the flow.
+        pt = pt + offset * subset_normals[idx]
     return pt, dist
 
 
@@ -403,7 +407,9 @@ def main():
     ap.add_argument("--sym-y", type=float, default=None,
                     help="symmetry plane y in mesh units; overrides the config")
     ap.add_argument("--offset", type=float, default=0.0,
-                    help="inward offset along the nodal normal, in mesh units")
+                    help="offset above the wall along the outward nodal "
+                         "normal, in mesh units (metres). Positive moves into "
+                         "the fluid; keep it below the first cell height")
     ap.add_argument("--tol", type=float, default=0.5,
                     help="max allowed x-y snap distance before a station is dropped")
     ap.add_argument("--out", default=None, help="write the config block to a file")
