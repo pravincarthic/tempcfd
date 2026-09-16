@@ -432,6 +432,13 @@ def main():
     if scale <= 0.0:
         raise ValueError("scale must be positive, got %g" % scale)
 
+    if aoa == 0.0 and args.config is None and args.aoa is None:
+        print("WARNING: no config and no --aoa, so stations are measured along "
+              "the mesh x axis. If the geometry was rotated for angle of "
+              "attack, station x is wrong by roughly x*(1-cos) + z*sin, which "
+              "grows with local body thickness. Pass --config or --aoa 0 to "
+              "silence this.")
+
     print("Wall marker: %s. Angle of attack: %.4f deg about Y. "
           "Station scale: %g. Symmetry plane y: %.4f."
           % (marker, aoa, scale, sym_y))
