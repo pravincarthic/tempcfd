@@ -1221,6 +1221,28 @@ def create_mesh(config_file='gmsh_config.json'):
             gmsh.finalize()
             return False
 
+        # Projected grand total: prisms (known exactly, from the real surface
+        # mesh) plus the pre-flight tet estimate from step 10. That estimate
+        # is documented as reading up to 8x high on a slender body, since it
+        # approximates wall distance with the body's bounding box, which for
+        # a thin body misclassifies much of the box interior as near-wall.
+        # Report both ends rather than one number that hides which side the
+        # uncertainty is on.
+        projected_low = n_prism + estimated / 8.0
+        projected_high = n_prism + estimated
+        print(f"Projected total with boundary layer: prisms {n_prism:.3e} + "
+              f"tet fill {estimated:.3e} (pre-flight estimate)")
+        print(f"  Realistic range {projected_low:.3e} to {projected_high:.3e}, "
+              "given the estimator's own up-to-8x slender-body bias. The "
+              "actual count after generate(3) will land somewhere in this "
+              "range, not necessarily the middle.")
+        if projected_high > budget:
+            print(f"  Warning: the high end exceeds max_element_budget "
+                  f"({budget:.3e}). The prism check above did not catch this "
+                  "because it only tests the prisms alone; this mesh may "
+                  "still exhaust memory or fail to finish even though that "
+                  "earlier check passed.")
+
         print("Extruding prism boundary layer...")
         try:
             ok, outer, bl_volumes, sym_laterals, strip_curves = \
