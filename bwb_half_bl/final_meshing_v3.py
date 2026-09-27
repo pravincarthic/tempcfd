@@ -433,41 +433,90 @@ def merge_section_params(defaults, override):
     return out
 
 
-def compute_first_layer_size(target_yplus, freestream):
+def compute_first_layer_size(target_yplus, freestream, station_mm=None,
+                             verbose=True):
     """
     First prism cell height from a target y+, using a flat-plate turbulent
     skin-friction correlation, in place of guessing the Size parameter.
 
     Cf = 0.026 / Re_x^(1/7)          (Schlichting-type turbulent flat-plate)
-    tau_w = 0.5 * Cf * rho * U^2
-    u_tau = sqrt(tau_w / rho)
-    y1 = target_yplus * mu / (rho * u_tau)
+    tau_w = 0.5 * Cf * rho_inf * U^2
+    u_tau = sqrt(tau_w / rho_w)
+    y1 = target_yplus * mu_w / (rho_w * u_tau)
 
-    freestream needs velocity_mps, density_kgm3, dynamic_viscosity_pas,
-    reference_length_mm. Returns the first layer height in mm, or None if a
-    required value is missing or non-positive.
+    freestream needs velocity_mps, density_kgm3, dynamic_viscosity_pas and
+    reference_length_mm. Optional:
+      yplus_station_mm        running length x at which y+ is to be exact
+                              (default reference_length_mm). Cf falls with
+                              x, so y+ is higher upstream of this station and
+                              lower downstream.
+      wall_density_kgm3,      near-wall gas properties. y+ is defined with
+      wall_dynamic_viscosity_pas  wall values; at hypersonic speed with a cold
+                              wall they differ a lot from freestream. Default
+                              to the freestream values when not given.
+    station_mm overrides yplus_station_mm. Returns the first layer height in
+    mm, or None if a required value is missing or non-positive.
     """
     try:
         u = float(freestream["velocity_mps"])
         rho = float(freestream["density_kgm3"])
         mu = float(freestream["dynamic_viscosity_pas"])
-        l_ref = float(freestream["reference_length_mm"]) / 1000.0
+        l_ref = float(freestream["reference_length_mm"])
+        x_mm = float(station_mm if station_mm is not None else
+                     freestream.get("yplus_station_mm", l_ref))
+        rho_w = float(freestream.get("wall_density_kgm3", rho))
+        mu_w = float(freestream.get("wall_dynamic_viscosity_pas", mu))
     except (KeyError, TypeError, ValueError):
         return None
-    if u <= 0 or rho <= 0 or mu <= 0 or l_ref <= 0:
+    if min(u, rho, mu, l_ref, x_mm, rho_w, mu_w) <= 0:
         return None
 
-    re_x = rho * u * l_ref / mu
-    if re_x <= 0:
-        return None
+    re_x = rho * u * (x_mm / 1000.0) / mu
     cf = 0.026 / (re_x ** (1.0 / 7.0))
     tau_w = 0.5 * cf * rho * u ** 2
-    u_tau = math.sqrt(max(tau_w, 1e-30) / rho)
-    y1_m = target_yplus * mu / (rho * u_tau)
-    y1_mm = y1_m * 1000.0
-    print(f"    y+ sizing: Re_x={re_x:.3e} Cf={cf:.5f} u_tau={u_tau:.3f}m/s "
-          f"-> first layer {y1_mm:.5f}mm for y+={target_yplus}")
+    u_tau = math.sqrt(max(tau_w, 1e-30) / rho_w)
+    y1_mm = target_yplus * mu_w / (rho_w * u_tau) * 1000.0
+    if verbose:
+        print(f"    y+ sizing at x={x_mm:.0f}mm: Re_x={re_x:.3e} Cf={cf:.5f} "
+              f"u_tau={u_tau:.3f}m/s -> first layer {y1_mm:.5f}mm for "
+              f"y+={target_yplus}")
     return y1_mm
+
+
+def plan_yplus_stack(first_cell, bl_params):
+    """
+    Layer count and growth ratio for a y+ driven first cell.
+
+    The first cell comes from y+, so NbLayers and Ratio can no longer both be
+    fixed if the stack is also meant to reach a physical Thickness. When
+    Thickness > 0, Ratio is kept as the largest growth allowed, the layer
+    count is the smallest that reaches Thickness at that ratio (capped by
+    max_layers), and the ratio is then eased down so the stack ends exactly
+    at Thickness. When Thickness is 0, NbLayers and Ratio are used as given.
+
+    Returns (n_layers, ratio, total_mm).
+    """
+    r_max = float(bl_params.get("Ratio", 1.1))
+    thick = float(bl_params.get("Thickness", 0.0) or 0.0)
+    n_cfg = int(bl_params.get("NbLayers", 36))
+    if thick <= 0 or thick <= first_cell:
+        total = first_cell * (n_cfg if r_max == 1.0 else
+                              (r_max ** n_cfg - 1.0) / (r_max - 1.0))
+        return n_cfg, r_max, total
+    if r_max <= 1.0:
+        n = int(math.ceil(thick / first_cell))
+    else:
+        n = int(math.ceil(math.log(1.0 + thick * (r_max - 1.0) / first_cell)
+                          / math.log(r_max)))
+    n_cap = int(bl_params.get("max_layers", 200))
+    if n > n_cap:
+        print(f"  Warning: reaching Thickness={thick}mm from a {first_cell:.5f}mm "
+              f"first cell at Ratio<={r_max} needs {n} layers, above "
+              f"max_layers={n_cap}; using {n_cap} with a larger ratio.")
+        n = n_cap
+    n = max(n, 1)
+    _, r = _solve_ratios(first_cell, n, np.array([thick]))
+    return n, float(r[0]), thick
 
 
 def setup_box_field(label, box, size_in, size_out, thickness):
@@ -800,15 +849,15 @@ def bl_heights(bl_params):
     heights, acc = [], 0.0
     for i in range(n):
         acc += h0 * ratio ** i
-        if cap > 0 and acc > cap:
+        if cap > 0 and acc > cap * (1.0 + 1e-9):
             print(f"  Stack capped by Thickness={cap}mm at {len(heights)} "
                   f"layers instead of {n}.")
             break
         heights.append(acc)
     if not heights:
         return []
-    print(f"  Prism stack: {len(heights)} layers, first {h0}mm, ratio {ratio}, "
-          f"total {heights[-1]:.3f}mm")
+    print(f"  Prism stack: {len(heights)} layers, first {h0:.5f}mm, ratio "
+          f"{ratio:.4f}, total {heights[-1]:.3f}mm")
     return heights
 
 
@@ -2664,26 +2713,42 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     any_bl_enabled = global_bl.get("enable", False)
     global_size = global_bl.get("Size", 0.05)
 
-    # target_yplus at the top level of boundary_layer_parameters is the one
-    # place the y+-driven first-cell physics (compute_first_layer_size) still
-    # sets the actual mesh, now that it can no longer vary per section -- set
-    # it once here for the whole wall from freestream_parameters, same
-    # formula section_target_size uses below for the informational per-
-    # section comparison.
+    # target_yplus in boundary_layer_parameters sets the first cell height
+    # for the whole wall from freestream_parameters (compute_first_layer_size)
+    # and overrides Size. The stack is then planned around it
+    # (plan_yplus_stack): Ratio is the largest growth allowed, the layer
+    # count follows from Thickness. A y+ target that cannot be evaluated
+    # stops the run rather than silently meshing with a different first cell.
     global_target_yplus = global_bl.get("target_yplus")
-    if global_target_yplus:
+    if any_bl_enabled and global_target_yplus:
+        print(f"Boundary layer y+ sizing, target y+={global_target_yplus}:")
         y1 = compute_first_layer_size(global_target_yplus, freestream_defaults)
-        if y1 is not None:
-            print(f"  target_yplus={global_target_yplus} -> first cell "
-                  f"{y1:.4f}mm from freestream_parameters (overrides "
-                  f"boundary_layer_parameters.Size={global_size}mm)")
-            global_size = y1
-            global_bl["Size"] = y1
-        elif not freestream_defaults_present:
-            print(f"  target_yplus={global_target_yplus} set but no usable "
-                  "freestream_parameters given (need velocity_mps, "
-                  "density_kgm3, dynamic_viscosity_pas, "
-                  "reference_length_mm) -- keeping Size as configured.")
+        if y1 is None:
+            print("  target_yplus is set but freestream_parameters is missing "
+                  "or invalid (need velocity_mps, density_kgm3, "
+                  "dynamic_viscosity_pas, reference_length_mm). Aborting; "
+                  "remove target_yplus to use Size directly.")
+            gmsh.finalize()
+            return False
+        n_l, ratio, total = plan_yplus_stack(y1, global_bl)
+        print(f"  First cell {y1:.5f}mm (overrides Size={global_size}mm), "
+              f"{n_l} layers, ratio {ratio:.4f}, total {total:.3f}mm")
+        global_size = y1
+        global_bl["Size"] = y1
+        global_bl["NbLayers"] = n_l
+        global_bl["Ratio"] = ratio
+    if any_bl_enabled and freestream_defaults:
+        # Report what the chosen first cell gives along the body: Cf falls
+        # with running length, so y+ is highest near the nose.
+        l_ref = freestream_defaults.get("reference_length_mm", 0) or 0
+        for frac in (0.05, 0.25, 1.0):
+            y_unit = compute_first_layer_size(1.0, freestream_defaults,
+                                              station_mm=frac * l_ref,
+                                              verbose=False) if l_ref else None
+            if y_unit:
+                print(f"  y+ of the {global_size:.5f}mm first cell at "
+                      f"x={frac * l_ref:.0f}mm: {global_size / y_unit:.2f}")
+        print()
 
     for name in section_x_ranges:
         over = sections_config.get(name, {}).get("boundary_layer", {})

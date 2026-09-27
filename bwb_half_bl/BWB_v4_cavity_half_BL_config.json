@@ -52,17 +52,26 @@
   "shock_box_parameters": {
     "enable": false
   },
-  "_boundary_layer_parameters_comment": "method auto = custom extrusion for half model / cavities. Cavity faces get cavity_thickness_mm, tapering to the full stack at thickness_gradient (mm per mm). First cell Size is kept, ratio solved per node.",
+  "_boundary_layer_parameters_comment": "method auto = custom extrusion for half model / cavities. target_yplus sets the first cell from freestream_parameters (overrides Size); Ratio is the max growth, layer count follows from Thickness. Cavity faces get cavity_thickness_mm, tapering to the full stack at thickness_gradient.",
   "boundary_layer_parameters": {
     "enable": true,
     "method": "auto",
+    "target_yplus": 0.8,
     "Size": 0.05,
     "Ratio": 1.1,
     "NbLayers": 43,
     "Thickness": 30,
+    "max_layers": 200,
     "Quads": true,
     "cavity_thickness_mm": 0.5,
     "thickness_gradient": 0.25
+  },
+  "_freestream_parameters_comment": "y+ is exact at yplus_station_mm (default reference_length_mm) and higher upstream. Optional wall_density_kgm3 / wall_dynamic_viscosity_pas use near-wall gas properties instead of freestream.",
+  "freestream_parameters": {
+    "velocity_mps": 3165.3,
+    "density_kgm3": 0.004221,
+    "dynamic_viscosity_pas": 1.596e-05,
+    "reference_length_mm": 48041.0
   },
   "utility_parameters": {
     "max_element_budget": 80000000,
