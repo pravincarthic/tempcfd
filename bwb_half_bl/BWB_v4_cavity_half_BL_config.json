@@ -1,87 +1,94 @@
 {
   "step_file": "BWB_Spaceplane_v4_cavity_20260908.brep",
-  "output_file": "output/BWB_Spaceplane_v4_cavity_half_BL.msh",
-  "export_geometry_path": "",
+  "output_file": "output/Gmsh_cavity_half_BL_yplus.msh",
+  "export_geometry_path": null,
   "gmsh_parameters": {
-    "General.NumThreads": 8,
-    "Mesh.MeshSizeMin": 0.5,
-    "Mesh.MeshSizeMax": 1000,
-    "Mesh.MeshSizeFromCurvature": 20,
+    "Mesh.RandomFactor": 1e-05,
+    "General.NumThreads": 16,
+    "Mesh.MeshSizeMin": 0.2,
+    "Mesh.MeshSizeMax": 4000,
+    "Mesh.MeshSizeFromCurvature": 24,
     "Mesh.Algorithm": 6,
     "Mesh.Algorithm3D": "auto",
     "Mesh.Smoothing": 5,
+    "Mesh.Optimize": 1,
+    "Mesh.OptimizeNetgen": 1,
+    "Mesh.OptimizeThreshold": 0.3,
+    "quality_abort_threshold": 0.01,
     "Mesh.ElementOrder": 1,
     "Mesh.MshFileVersion": 2.2,
-    "General.Terminal": 1,
-    "quality_abort_threshold": 0.01
+    "General.Terminal": 1
   },
   "geometry_parameters": {
-    "uniform_dilation_factor": 1.0,
-    "rotation_angle_deg": 0.0,
+    "rotation_angle_deg": 0,
     "rotation_by_CoM": false,
+    "test_for_CoM_only": false,
+    "uniform_dilation_factor": 1.0,
     "enable_symmetry_half_model": true,
     "symmetry_plane_y_mm": 0.0,
     "symmetry_keep_positive_side": true,
-    "far_field_x0_mm": -50000,
-    "far_field_length_mm": 200000,
-    "far_field_r_envelope_mm": 100000,
+    "far_field_x0_mm": -20000,
+    "far_field_length_mm": 110000,
+    "far_field_r_envelope_mm": 40000,
     "far_field_face_tolerance_mm": 0.5,
-    "cut_cache_file": "output/cut_cache_half.brep",
-    "dump_face_classification": false
+    "two_stage_half_cut": true,
+    "allow_full_model_fallback": true,
+    "min_cut_volume_fraction": 1e-09,
+    "dump_face_classification": false,
+    "cut_cache_file": "output/cut_cache_half.brep"
   },
   "size_field_parameters": {
-    "size_near": 0.05,
-    "size_far": 1000,
-    "dist_min": 300,
-    "dist_max": 25000,
+    "size_near": 120.0,
+    "size_far": 2500.0,
+    "dist_min": 500,
+    "dist_max": 10000,
+    "min_sampling": 20,
+    "max_sampling": 400,
     "cavity_size": 1.0,
     "cavity_dist_max": 50,
-    "auto_detect_cavity": true,
-    "cavity_max_diag_mm": 20,
-    "cavity_surface_tags": []
+    "cavity_surface_tags": [],
+    "cavity_max_diag_mm": 20
   },
-  "body_segmentation_parameters": {
-    "enable": false,
-    "slice_body": false,
-    "sections": {
-      "nose": {
-        "enable": false
-      }
-    }
+  "nose_refinement_parameters": {
+    "enable": true,
+    "length_fraction": 0.12,
+    "lateral_pad_mm": 500,
+    "size_mm": 100.0,
+    "transition_thickness_mm": 2000
   },
   "shock_box_parameters": {
     "enable": false
   },
-  "_boundary_layer_parameters_comment": "method auto = custom extrusion for half model / cavities. target_yplus sets the first cell from freestream_parameters (overrides Size); Ratio is the max growth, layer count follows from Thickness. Cavity faces get cavity_thickness_mm, tapering to the full stack at thickness_gradient.",
+  "_boundary_layer_parameters_comment": "target_yplus sets the first cell from freestream_parameters (overrides Size). Ratio is the max growth; the layer count follows from Thickness (here the 5.83 mm stack of the old 25 layer recipe). Faces up to cavity_max_diag_mm get cavity_thickness_mm, tapering at thickness_gradient.",
   "boundary_layer_parameters": {
     "enable": true,
     "method": "auto",
     "target_yplus": 0.8,
     "Size": 0.05,
-    "Ratio": 1.1,
-    "NbLayers": 43,
-    "Thickness": 30,
+    "Ratio": 1.1112,
+    "Thickness": 5.83,
+    "NbLayers": 25,
     "max_layers": 200,
-    "Quads": true,
     "cavity_thickness_mm": 0.5,
     "thickness_gradient": 0.25
   },
-  "_freestream_parameters_comment": "y+ is exact at yplus_station_mm (default reference_length_mm) and higher upstream. Optional wall_density_kgm3 / wall_dynamic_viscosity_pas use near-wall gas properties instead of freestream.",
+  "_freestream_parameters_comment": "y+ is exact at yplus_station_mm (default reference_length_mm) and higher upstream. Optional wall_density_kgm3 / wall_dynamic_viscosity_pas use near-wall gas properties.",
   "freestream_parameters": {
     "velocity_mps": 3165.3,
     "density_kgm3": 0.004221,
     "dynamic_viscosity_pas": 1.596e-05,
     "reference_length_mm": 48041.0
   },
-  "utility_parameters": {
-    "max_element_budget": 80000000,
-    "enable_su2_export": true,
-    "su2_dilation_factor": 0.001,
-    "dry_run": false
-  },
   "su2_marker_names": {
     "wall": "wall",
     "symmetry": "symmetry",
     "farfield": "farfield"
+  },
+  "utility_parameters": {
+    "su2_dilation_factor": 0.001,
+    "enable_su2_export": true,
+    "surface_mesh_only": false,
+    "max_element_budget": 10000000000.0,
+    "abort_on_bad_quality": true
   }
 }

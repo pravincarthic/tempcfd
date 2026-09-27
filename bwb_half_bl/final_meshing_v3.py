@@ -635,17 +635,45 @@ def auto_sampling(wall_faces, dist_min, size_params):
     return sampling
 
 
-def setup_size_field(wall_faces, size_params):
+def setup_size_field(wall_faces, size_params, small_faces=()):
+    """
+    Near-wall Threshold on the distance to the whole wall.
+
+    Sampling is per parametric direction, so each surface costs Sampling^2
+    points. Small faces (cavities, a few mm across) are put in a second
+    Distance field sampled at their own scale and the two distances are
+    combined with Min: sampling 4300 cavity faces at the body-scale count
+    was ~10^8 points and a surface mesh that never finished.
+    """
     size_near = size_params.get("size_near", 2.0)
     size_far = size_params.get("size_far", 500.0)
     dist_min = size_params.get("dist_min", 200.0)
     dist_max = size_params.get("dist_max", 20000.0)
 
-    sampling = auto_sampling(wall_faces, dist_min, size_params)
+    small = [f for f in wall_faces if f in set(small_faces)]
+    big = [f for f in wall_faces if f not in set(small)] or wall_faces
+    if len(big) == len(wall_faces):
+        small = []
+    sampling = auto_sampling(big, dist_min, size_params)
 
     dist_field = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(dist_field, "SurfacesList", wall_faces)
+    gmsh.model.mesh.field.setNumbers(dist_field, "SurfacesList", big)
     gmsh.model.mesh.field.setNumber(dist_field, "Sampling", sampling)
+    if small:
+        ext = 0.0
+        for f in small:
+            bb = gmsh.model.getBoundingBox(2, f)
+            ext = max(ext, bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+        small_sampling = int(min(50, max(5, math.ceil(
+            ext / max(min(size_near, dist_min), 1e-9)) + 1)))
+        d_small = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(d_small, "SurfacesList", small)
+        gmsh.model.mesh.field.setNumber(d_small, "Sampling", small_sampling)
+        d_min = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(d_min, "FieldsList", [dist_field, d_small])
+        print(f"  {len(small)} small wall face(s) sampled separately at "
+              f"{small_sampling}")
+        dist_field = d_min
 
     thresh_field = gmsh.model.mesh.field.add("Threshold")
     gmsh.model.mesh.field.setNumber(thresh_field, "InField", dist_field)
@@ -2056,7 +2084,10 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     # AND its own independent boundary layer recipe (a single blended CAD
     # face cannot be extruded with two different layer counts; three separate
     # faces can).
-    seg_enabled = seg_params.get("enable", True)
+    # Off unless the config asks for it: with it on, every section gets a
+    # refinement box over the body (default size_far / 10), which an older
+    # config without this block never had.
+    seg_enabled = seg_params.get("enable", False)
     x_split_1 = x_split_2 = None
     seg_method = "disabled"
     section_x_ranges = {"nose": (body_bbox[0], body_bbox[3])}
@@ -2081,7 +2112,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         # section_x_ranges alone. On a body with thousands of faces (e.g. the
         # cavity model) each slicing boolean takes many minutes, so it can
         # be switched off.
-        if seg_params.get("slice_body", True):
+        if seg_params.get("slice_body", False):
             chunk_tags = slice_body_into_segments(
                 step_file, dilation, angle_deg, rotation_by_com, body_bbox,
                 x_split_1, x_split_2, pad_mm, mass_tol)
@@ -2089,7 +2120,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
             print("  Physical slicing skipped (slice_body false): sections "
                   "are X ranges only.")
 
-        if chunk_tags is None and seg_params.get("slice_body", True):
+        if chunk_tags is None and seg_params.get("slice_body", False):
             print("  Falling back to an unsliced body: sections still get "
                   "their own size fields and X ranges below, but boundary "
                   "layer extrusion (if enabled) runs once for the whole "
@@ -2590,23 +2621,28 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     # sampling every face at the body-scale count meant ~10^8 points and a
     # surface mesh that never finished. The cavities get their own distance
     # field below, sampled at their own scale.
+    # Small faces (diag up to cavity_max_diag_mm) are always found: they are
+    # sampled separately in the wall distance field, and the custom boundary
+    # layer thins its stack on them. Local cavity refinement (cavity_size)
+    # is only added for explicit cavity_surface_tags or auto_detect_cavity.
+    small_diag = size_params.get("cavity_max_diag_mm", 100.0)
+    small_faces = detect_small_wall_faces(wall_faces, small_diag)
+    if small_faces:
+        print(f"Found {len(small_faces)} small wall face(s) (diag up to "
+              f"{small_diag}mm), treated as cavities by the boundary layer")
     cavity_tags = size_params.get("cavity_surface_tags", [])
     if not cavity_tags and size_params.get("auto_detect_cavity", False):
-        cavity_tags = detect_small_wall_faces(
-            wall_faces, size_params.get("cavity_max_diag_mm", 100.0))
-        print(f"Auto-detected {len(cavity_tags)} small-scale wall face(s) as "
-              f"cavity, diag up to "
-              f"{size_params.get('cavity_max_diag_mm', 100.0)}mm")
+        cavity_tags = small_faces
+        print(f"  auto_detect_cavity: cavity refinement on those faces")
     cavity_tags = [f for f in cavity_tags if f in set(wall_faces)]
-    main_wall = [f for f in wall_faces if f not in set(cavity_tags)] or wall_faces
 
-    thresh_field = setup_size_field(main_wall, size_params)
+    thresh_field = setup_size_field(wall_faces, size_params, small_faces)
     fields = [thresh_field]
     boxes = []
 
     sections_config = seg_params.get("sections", {})
     default_section_params = {
-        "enable": True, "size_mm": size_far * 0.1,
+        "enable": seg_enabled, "size_mm": size_far * 0.1,
         "transition_thickness_mm": 500.0, "lateral_pad_mm": 500.0,
     }
     for name, x_range in section_x_ranges.items():
@@ -2618,12 +2654,28 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
             boxes.append(sb)
             fields.append(setup_box_field(name.capitalize(), sb[0], sb[1], size_far, sb[2]))
 
+    # Older configs: nose_refinement_parameters, a box over the first
+    # length_fraction of the body.
+    nose_params = config.get("nose_refinement_parameters", {})
+    if nose_params.get("enable", False) and not seg_enabled:
+        frac = nose_params.get("length_fraction", 0.12)
+        nb = section_box("nose", {"enable": True,
+                                  "size_mm": nose_params.get("size_mm", 100.0),
+                                  "transition_thickness_mm": nose_params.get(
+                                      "transition_thickness_mm", 500.0),
+                                  "lateral_pad_mm": nose_params.get("lateral_pad_mm", 500.0)},
+                         (body_bbox[0], body_bbox[0] + frac * body_length),
+                         body_bbox, half_model, sym_coord, size_far)
+        boxes.append(nb)
+        fields.append(setup_box_field("Nose", nb[0], nb[1], size_far, nb[2]))
+
     shock = shock_box(shock_params, body_bbox, domain, half_model, sym_coord)
     if shock:
         boxes.append(shock)
         fields.append(setup_box_field("Shock", shock[0], shock[1], size_far, shock[2]))
 
     cavity_faces = cavity_tags
+    bl_cavity_faces = sorted(set(cavity_faces) | set(small_faces))
     if cavity_tags:
         cav_extent = 0.0
         for f in cavity_tags:
@@ -2795,7 +2847,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
 
         print("Boundary layer: one shared growth recipe for every enabled "
               "section.")
-        print(f"  Shared recipe: Size={global_size}mm Ratio={global_bl.get('Ratio')} "
+        print(f"  Shared recipe: Size={global_size:.5f}mm Ratio={float(global_bl.get('Ratio', 1.1112)):.4f} "
               f"NbLayers={global_bl.get('NbLayers')} "
               f"Thickness={global_bl.get('Thickness')}")
         for name in section_x_ranges:
@@ -2822,13 +2874,13 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         gmsh.finalize()
         return False
     if bl_method == "auto":
-        bl_method = "custom" if (symmetry_faces or cavity_faces) else "gmsh"
+        bl_method = "custom" if (symmetry_faces or bl_cavity_faces) else "gmsh"
     use_custom_bl = any_bl_enabled and bl_method == "custom"
     if any_bl_enabled:
         print(f"Boundary layer method: {bl_method}")
         if use_custom_bl:
-            print(f"  Cavity faces get a {global_bl.get('cavity_thickness_mm', 0.5)}mm "
-                  "stack, tapering to the full stack at "
+            print(f"  {len(bl_cavity_faces)} cavity face(s) get a "
+                  f"{global_bl.get('cavity_thickness_mm', 0.5)}mm stack, tapering to the full stack at "
                   f"thickness_gradient={global_bl.get('thickness_gradient', 0.25)}")
             if bl_half:
                 print("  Half model: the symmetry plane mesh is kept and moved "
@@ -3110,7 +3162,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         print("Building prism boundary layer (custom extrusion)...")
         try:
             prism_vol, tet_vol = build_custom_prism_layers(
-                bl_wall_faces, symmetry_faces, farfield_faces, cavity_faces,
+                bl_wall_faces, symmetry_faces, farfield_faces, bl_cavity_faces,
                 global_bl, sym_coord, fluid_volume_tags, sym_name)
         except Exception as e:
             print(f"Boundary layer extrusion failed: {e}")
