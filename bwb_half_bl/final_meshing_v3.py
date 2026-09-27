@@ -1934,9 +1934,25 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
               "enabled) to get real counts, then stop before the 3D tet fill "
               "and export. No .msh or .su2 written.\n")
 
-    step_file = config.get('step_file')
-    output_path = config.get('output_file')
-    export_geometry_path = config.get('export_geometry_path')
+    # Relative paths in the config are taken relative to the config file, so
+    # a folder holding the script, config and brep works on any machine.
+    cfg_dir = os.path.dirname(os.path.abspath(config_file))
+
+    def resolve(path):
+        if not path:
+            return path
+        path = os.path.expanduser(path)
+        return path if os.path.isabs(path) else os.path.join(cfg_dir, path)
+
+    step_file = resolve(config.get('step_file'))
+    output_path = resolve(config.get('output_file'))
+    export_geometry_path = resolve(config.get('export_geometry_path'))
+    geo_cfg = config.get('geometry_parameters', {})
+    if geo_cfg.get('cut_cache_file'):
+        geo_cfg['cut_cache_file'] = resolve(geo_cfg['cut_cache_file'])
+    out_dir = os.path.dirname(output_path) if output_path else ""
+    if out_dir and not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
 
     gmsh_params = config.get('gmsh_parameters', {})
     size_params = config.get('size_field_parameters', {})
@@ -2899,8 +2915,12 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     if estimated > budget:
         print("  Aborting before meshing. This would not finish, or would "
               "exhaust memory.")
-        print("  Reduce or disable the shock box, shrink the far field, or raise "
-              "size_near, size_in_mm and max_element_budget deliberately.")
+        h_wall = max(size_params.get("size_near", 2.0), size_min)
+        print(f"  Near-wall size is {h_wall}mm (larger of size_near and "
+              f"Mesh.MeshSizeMin) out to dist_min={size_params.get('dist_min', 200.0)}mm, "
+              "which dominates the count. Raise size_near and "
+              "Mesh.MeshSizeMin, reduce dist_min, disable the shock box or "
+              "shrink the far field; or raise max_element_budget deliberately.")
         gmsh.finalize()
         return False
     print()
@@ -3334,5 +3354,20 @@ if __name__ == "__main__":
         pass
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     flags = [a for a in sys.argv[1:] if a.startswith('--')]
-    cfg = args[0] if args else 'gmsh_config.json'
-    sys.exit(0 if create_mesh(cfg, dry_run='--dry-run' in flags) else 1)
+    if args:
+        cfg = args[0]
+    else:
+        # No argument (e.g. run from an IDE): use gmsh_config.json in the
+        # working directory, else the config shipped next to this script.
+        here = os.path.dirname(os.path.abspath(__file__))
+        cfg = next((c for c in ('gmsh_config.json',
+                                os.path.join(here, 'gmsh_config.json'),
+                                os.path.join(here, 'BWB_v4_cavity_half_BL_config.json'))
+                    if os.path.exists(c)), 'gmsh_config.json')
+    ok = create_mesh(cfg, dry_run='--dry-run' in flags)
+    if not ok:
+        print("Meshing stopped. The reason is the last message printed above.")
+    # Under a debugger a non-zero SystemExit is reported as an exception and
+    # hides that message, so only set the exit code when run normally.
+    if sys.gettrace() is None:
+        sys.exit(0 if ok else 1)

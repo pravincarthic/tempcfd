@@ -1,6 +1,6 @@
 {
-  "step_file": "/Users/pravin/Downloads/BWB_SpacePlane_Cavity_20260908_STEP/BWB_Spaceplane_v4_cavity_20260908.brep",
-  "output_file": "/Users/pravin/Downloads/BWB_SpacePlane_Cavity_20260908_STEP/BWB_Spaceplane_v4_cavity_half_BL.msh",
+  "step_file": "BWB_Spaceplane_v4_cavity_20260908.brep",
+  "output_file": "output/BWB_Spaceplane_v4_cavity_half_BL.msh",
   "export_geometry_path": "",
   "gmsh_parameters": {
     "General.NumThreads": 8,
@@ -26,7 +26,7 @@
     "far_field_length_mm": 200000,
     "far_field_r_envelope_mm": 100000,
     "far_field_face_tolerance_mm": 0.5,
-    "cut_cache_file": "/Users/pravin/Downloads/BWB_SpacePlane_Cavity_20260908_STEP/cut_cache_half.brep",
+    "cut_cache_file": "output/cut_cache_half.brep",
     "dump_face_classification": false
   },
   "size_field_parameters": {
