@@ -534,19 +534,68 @@ def setup_box_field(label, box, size_in, size_out, thickness):
     return f
 
 
-def section_box(section_name, sect_params, x_range, body_bbox, half_model,
-                sym_coord, size_far):
+def sample_wall_points(wall_faces, probe_size):
     """
-    Build the (box, size_in, thickness) tuple for one detected section
-    (nose/hump/rear), spanning its X range at full padded Y/Z -- same shape
-    as the old nose_box, generalized to any of the 3 sections and driven
-    entirely by that section's own JSON block.
+    Points on the real (trimmed) wall, from a throwaway coarse surface mesh.
+
+    Used to find how wide and tall the body really is over a given X range,
+    so a refinement box hugs that part of the body instead of spanning the
+    whole body bounding box. Sampling a face's parameter range instead is
+    not usable: it covers the whole untrimmed surface, which on this BWB put
+    the nose box out to the wing tip. The probe mesh is cleared afterwards
+    and the size options restored, so meshing proper is unaffected.
+    """
+    keys = ("Mesh.MeshSizeMin", "Mesh.MeshSizeMax", "Mesh.MeshSizeFromCurvature",
+            "Mesh.MeshSizeExtendFromBoundary", "Mesh.MeshSizeFromPoints",
+            "General.Terminal")
+    saved = {k: gmsh.option.getNumber(k) for k in keys}
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", probe_size)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", probe_size)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        pts = []
+        gmsh.model.mesh.generate(2)
+        for f in wall_faces:
+            _, c, _ = gmsh.model.mesh.getNodes(2, f, includeBoundary=True)
+            if len(c):
+                pts.append(np.asarray(c, dtype=float).reshape(-1, 3))
+        return np.concatenate(pts) if pts else np.zeros((0, 3))
+    except Exception as e:
+        print(f"  Wall probe mesh failed ({e}); refinement boxes use the "
+              "body bounding box")
+        return None
+    finally:
+        gmsh.model.mesh.clear()
+        for k, v in saved.items():
+            gmsh.option.setNumber(k, v)
+
+
+def section_box(section_name, sect_params, x_range, body_bbox, half_model,
+                sym_coord, size_far, wall_points=None):
+    """
+    Build the (box, size_in, thickness) tuple for one section (nose/hump/rear
+    or the nose_refinement_parameters box) over its X range.
+
+    With wall_points the box's Y and Z are the body's own extent over that X
+    range plus lateral_pad_mm. Without them it falls back to the whole body
+    bounding box, which over a BWB nose is several times wider and taller than
+    the nose itself: at a 40 mm box size that one box was ~58M tets.
     """
     if not sect_params.get("enable", True):
         return None
     xa, xb = x_range
     pad = sect_params.get("lateral_pad_mm", 500.0)
     bx_min, by_min, bz_min, bx_max, by_max, bz_max = body_bbox
+    if wall_points is not None and len(wall_points):
+        sel = wall_points[(wall_points[:, 0] >= xa) & (wall_points[:, 0] <= xb)]
+        if half_model and len(sel):
+            sel = sel[sel[:, 1] >= sym_coord - 1e-6] if by_max > sym_coord else sel
+        if len(sel):
+            by_min, bz_min = sel[:, 1].min(), sel[:, 2].min()
+            by_max, bz_max = sel[:, 1].max(), sel[:, 2].max()
     box = (xa, xb,
           sym_coord if half_model else by_min - pad, by_max + pad,
           bz_min - pad, bz_max + pad)
@@ -649,6 +698,16 @@ def setup_size_field(wall_faces, size_params, small_faces=()):
     size_far = size_params.get("size_far", 500.0)
     dist_min = size_params.get("dist_min", 200.0)
     dist_max = size_params.get("dist_max", 20000.0)
+    # growth_rate g: the size rises linearly with wall distance past dist_min,
+    # h = size_near + g * (d - dist_min), so each cell is about (1 + g) times
+    # its neighbour nearer the wall. It sets dist_max itself. Without it the
+    # older Sigmoid ramp is kept, which holds the size near size_near for
+    # roughly the first third of the DistMin-DistMax span: on the cavity body
+    # at size_near 60 that band alone was most of a 117M cell mesh.
+    growth = size_params.get("growth_rate")
+    if growth:
+        dist_max = dist_min + (size_far - size_near) / float(growth)
+    sigmoid = 0 if growth else int(size_params.get("sigmoid", 1))
 
     small = [f for f in wall_faces if f in set(small_faces)]
     big = [f for f in wall_faces if f not in set(small)] or wall_faces
@@ -681,10 +740,11 @@ def setup_size_field(wall_faces, size_params, small_faces=()):
     gmsh.model.mesh.field.setNumber(thresh_field, "SizeMax", size_far)
     gmsh.model.mesh.field.setNumber(thresh_field, "DistMin", dist_min)
     gmsh.model.mesh.field.setNumber(thresh_field, "DistMax", dist_max)
-    gmsh.model.mesh.field.setNumber(thresh_field, "Sigmoid", 1)
+    gmsh.model.mesh.field.setNumber(thresh_field, "Sigmoid", sigmoid)
 
     print(f"Size field: near={size_near}mm far={size_far}mm "
-          f"dist_min={dist_min}mm dist_max={dist_max}mm\n")
+          f"dist_min={dist_min}mm dist_max={dist_max:.0f}mm "
+          f"{'linear, growth ' + str(growth) if growth else ('sigmoid' if sigmoid else 'linear')}\n")
     return thresh_field
 
 
@@ -716,6 +776,8 @@ def estimate_elements(domain, body_bbox, size_params, boxes, size_min, size_max,
     size_far = size_params.get("size_far", 500.0)
     dist_min = size_params.get("dist_min", 200.0)
     dist_max = size_params.get("dist_max", 20000.0)
+    if size_params.get("growth_rate"):
+        dist_max = dist_min + (size_far - size_near) / float(size_params["growth_rate"])
 
     t = np.clip((d - dist_min) / max(dist_max - dist_min, 1e-9), 0.0, 1.0)
     h = size_near + (size_far - size_near) * t
@@ -2147,10 +2209,32 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     x0 = geom_params.get("far_field_x0_mm", -50000.0)
     length = geom_params.get("far_field_length_mm", 200000.0)
     r_envelope = geom_params.get("far_field_r_envelope_mm", 100000.0)
+    # Optional box extents that override the symmetric r_envelope: lateral
+    # extent from the symmetry plane, and the lower and upper Z bounds. A
+    # hypersonic body only needs the domain to contain its bow shock, and the
+    # body sits above Z=0 here, so a symmetric box wastes most of its volume.
+    y_half = geom_params.get("far_field_y_mm", r_envelope)
+    z_lo = geom_params.get("far_field_z_min_mm", -r_envelope)
+    z_hi = geom_params.get("far_field_z_max_mm", r_envelope)
+    dz = z_hi - z_lo
+    outside = []
+    if x0 >= body_bbox[0] or x0 + length <= body_bbox[3]:
+        outside.append("X")
+    if y_half <= max(abs(body_bbox[1] - sym_coord), abs(body_bbox[4] - sym_coord)):
+        outside.append("Y")
+    if z_lo >= body_bbox[2] or z_hi <= body_bbox[5]:
+        outside.append("Z")
+    if outside:
+        print(f"The far-field box does not contain the body in {outside}: "
+              f"box X=[{x0:.0f},{x0 + length:.0f}] Y half width {y_half:.0f} "
+              f"Z=[{z_lo:.0f},{z_hi:.0f}], body bbox {[round(v) for v in body_bbox]}. "
+              "Aborting.")
+        gmsh.finalize()
+        return False
 
     if half_model:
-        y_origin = sym_coord if keep_positive else sym_coord - r_envelope
-        y_extent = r_envelope
+        y_origin = sym_coord if keep_positive else sym_coord - y_half
+        y_extent = y_half
         print(f"Half model: symmetry plane y={sym_coord}, keeping "
               f"{'positive' if keep_positive else 'negative'} side")
         if not (body_bbox[1] < sym_coord < body_bbox[4]):
@@ -2159,18 +2243,18 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
             print("  Warning: the body is not centred on the symmetry plane. "
                   "A half model is only valid for a symmetric body.")
     else:
-        y_origin = -r_envelope
-        y_extent = 2 * r_envelope
+        y_origin = -y_half
+        y_extent = 2 * y_half
         print("Half model disabled, meshing the full span")
 
-    if body_length > 0 and r_envelope / body_length > 1.5:
-        print(f"  Warning: far field radius is {r_envelope / body_length:.1f} body "
+    if body_length > 0 and max(y_half, -z_lo, z_hi) / body_length > 1.5:
+        print(f"  Warning: far field extends {max(y_half, -z_lo, z_hi) / body_length:.1f} body "
               "lengths. At hypersonic speeds disturbances do not travel upstream, "
               "so the domain can be much tighter. Shrinking it saves more cells "
               "than the symmetry cut does.")
 
-    box_tag = gmsh.model.occ.addBox(x0, y_origin, -r_envelope,
-                                    length, y_extent, 2 * r_envelope)
+    box_tag = gmsh.model.occ.addBox(x0, y_origin, z_lo,
+                                    length, y_extent, dz)
     gmsh.model.occ.synchronize()
     if export_geometry_path:
         export_step(export_geometry_path + ".2.step")
@@ -2204,8 +2288,8 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     # body AND re-slices it the same way, since slicing is cheap (a handful of
     # booleans) next to a full far-field cut.
     min_fraction = geom_params.get("min_cut_volume_fraction", 1e-9)
-    half_box_volume = length * y_extent * 2 * r_envelope
-    full_box_volume = length * 2 * r_envelope * 2 * r_envelope
+    half_box_volume = length * y_extent * dz
+    full_box_volume = length * 2 * y_half * dz
 
     def cut_volume_check(reference_volume):
         """Return (tags, removed_volume) against the box that strategy built."""
@@ -2262,10 +2346,10 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         gmsh.model.occ.synchronize()
 
     def try_two_stage(tools):
-        full_box = gmsh.model.occ.addBox(x0, -r_envelope, -r_envelope,
-                                         length, 2 * r_envelope, 2 * r_envelope)
-        half_box = gmsh.model.occ.addBox(x0, y_origin, -r_envelope,
-                                         length, y_extent, 2 * r_envelope)
+        full_box = gmsh.model.occ.addBox(x0, -y_half, z_lo,
+                                         length, 2 * y_half, dz)
+        half_box = gmsh.model.occ.addBox(x0, y_origin, z_lo,
+                                         length, y_extent, dz)
         gmsh.model.occ.synchronize()
         cut_res, _ = gmsh.model.occ.cut([(3, full_box)], tools,
                                         removeObject=True, removeTool=True)
@@ -2275,8 +2359,8 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         gmsh.model.occ.synchronize()
 
     def try_full_model(tools):
-        full_box = gmsh.model.occ.addBox(x0, -r_envelope, -r_envelope,
-                                         length, 2 * r_envelope, 2 * r_envelope)
+        full_box = gmsh.model.occ.addBox(x0, -y_half, z_lo,
+                                         length, 2 * y_half, dz)
         gmsh.model.occ.synchronize()
         gmsh.model.occ.cut([(3, full_box)], tools,
                            removeObject=True, removeTool=True)
@@ -2317,6 +2401,17 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     # after changing any of those.
     cut_cache = geom_params.get("cut_cache_file", "")
     cache_meta = cut_cache + ".json" if cut_cache else ""
+    cache_key = {"step_file": os.path.abspath(step_file), "dilation": dilation,
+                 "angle_deg": angle_deg, "rotation_by_com": rotation_by_com,
+                 "box": [x0, length, y_half, z_lo, z_hi], "half_model": half_model,
+                 "sym_coord": sym_coord, "keep_positive": keep_positive}
+    if cut_cache and os.path.exists(cut_cache) and os.path.exists(cache_meta):
+        with open(cache_meta) as fh:
+            meta = json.load(fh)
+        if meta.get("key") != json.loads(json.dumps(cache_key)):
+            print(f"Cut cache {cut_cache} was made for different geometry or "
+                  "far-field settings, recomputing it")
+            os.remove(cache_meta)
     if cut_cache and os.path.exists(cut_cache) and os.path.exists(cache_meta):
         with open(cache_meta) as fh:
             meta = json.load(fh)
@@ -2328,8 +2423,8 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         used_strategy = meta.get("strategy", "direct")
         if used_strategy == "full_model":
             half_model = False
-            y_origin = -r_envelope
-            y_extent = 2 * r_envelope
+            y_origin = -y_half
+            y_extent = 2 * y_half
         strategies = []
         print(f"Cut geometry loaded from cache {cut_cache} (strategy "
               f"'{used_strategy}'), boolean cut skipped")
@@ -2346,8 +2441,8 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         gmsh.model.add("BWB_Spaceplane_Mesh")
         tools, fresh_chunks = import_body_or_chunks()
         if name == "direct":
-            box_tag = gmsh.model.occ.addBox(x0, y_origin, -r_envelope,
-                                            length, y_extent, 2 * r_envelope)
+            box_tag = gmsh.model.occ.addBox(x0, y_origin, z_lo,
+                                            length, y_extent, dz)
             gmsh.model.occ.synchronize()
 
         print(f"Boolean cut, strategy '{name}'...")
@@ -2367,8 +2462,8 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
             used_strategy = name
             if name == "full_model":
                 half_model = False
-                y_origin = -r_envelope
-                y_extent = 2 * r_envelope
+                y_origin = -y_half
+                y_extent = 2 * y_half
                 print("  Fell back to a full span domain. The symmetry plane "
                       "cut could not be made on this geometry, so there is no "
                       "symmetry marker and the cell count is about double.")
@@ -2393,7 +2488,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         try:
             gmsh.write(cut_cache)
             with open(cache_meta, "w") as fh:
-                json.dump({"strategy": used_strategy, "step_file": step_file}, fh)
+                json.dump({"strategy": used_strategy, "key": cache_key}, fh)
             print(f"Cut geometry cached to {cut_cache}")
         except Exception as e:
             print(f"Could not write the cut cache: {e}")
@@ -2449,7 +2544,6 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     x_outlet = x0 + length
     y_lo = y_origin
     y_hi = y_origin + y_extent
-    z_lo, z_hi = -r_envelope, r_envelope
     domain = (x_inlet, x_outlet, y_lo, y_hi, z_lo, z_hi)
     tol = geom_params.get("far_field_face_tolerance_mm", 0.5)
 
@@ -2641,6 +2735,9 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
     boxes = []
 
     sections_config = seg_params.get("sections", {})
+    wall_points = None
+    if seg_enabled or config.get("nose_refinement_parameters", {}).get("enable", False):
+        wall_points = sample_wall_points(wall_faces, max(body_length / 200.0, 1.0))
     default_section_params = {
         "enable": seg_enabled, "size_mm": size_far * 0.1,
         "transition_thickness_mm": 500.0, "lateral_pad_mm": 500.0,
@@ -2649,7 +2746,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
         sect_cfg = merge_section_params(default_section_params,
                                         sections_config.get(name, {}))
         sb = section_box(name, sect_cfg, x_range, body_bbox, half_model,
-                         sym_coord, size_far)
+                         sym_coord, size_far, wall_points)
         if sb:
             boxes.append(sb)
             fields.append(setup_box_field(name.capitalize(), sb[0], sb[1], size_far, sb[2]))
@@ -2665,7 +2762,7 @@ def create_mesh(config_file='gmsh_config.json', dry_run=False):
                                       "transition_thickness_mm", 500.0),
                                   "lateral_pad_mm": nose_params.get("lateral_pad_mm", 500.0)},
                          (body_bbox[0], body_bbox[0] + frac * body_length),
-                         body_bbox, half_model, sym_coord, size_far)
+                         body_bbox, half_model, sym_coord, size_far, wall_points)
         boxes.append(nb)
         fields.append(setup_box_field("Nose", nb[0], nb[1], size_far, nb[2]))
 

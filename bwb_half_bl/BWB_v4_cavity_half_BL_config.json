@@ -19,6 +19,7 @@
     "Mesh.MshFileVersion": 2.2,
     "General.Terminal": 1
   },
+  "_geometry_parameters_comment": "Domain sized for M~10 at 0 deg AoA: 3 m upstream of the nose, 12 m of wake, 30 m laterally, Z -12 to +18 m (body Z 0 to 5.6 m). Check the first solution that the bow shock leaves through the outlet, not the side or top/bottom faces. Re-check if rotation_angle_deg changes.",
   "geometry_parameters": {
     "rotation_angle_deg": 0,
     "rotation_by_CoM": false,
@@ -27,33 +28,36 @@
     "enable_symmetry_half_model": true,
     "symmetry_plane_y_mm": 0.0,
     "symmetry_keep_positive_side": true,
-    "far_field_x0_mm": -20000,
-    "far_field_length_mm": 110000,
-    "far_field_r_envelope_mm": 40000,
+    "far_field_x0_mm": -3000,
+    "far_field_length_mm": 63000,
     "far_field_face_tolerance_mm": 0.5,
     "two_stage_half_cut": true,
     "allow_full_model_fallback": true,
     "min_cut_volume_fraction": 1e-09,
     "dump_face_classification": false,
-    "cut_cache_file": "output/cut_cache_half.brep"
+    "cut_cache_file": "output/cut_cache_half.brep",
+    "far_field_y_mm": 30000,
+    "far_field_z_min_mm": -12000,
+    "far_field_z_max_mm": 18000
   },
+  "_size_field_parameters_comment": "growth_rate: size rises linearly with wall distance past dist_min, each cell about 20 percent larger than its neighbour; it sets dist_max. Measured on this brep: 20.5M cells (13.4M prisms, 7.1M tets), 6.5 GB RAM.",
   "size_field_parameters": {
-    "size_near": 120.0,
+    "size_near": 60.0,
     "size_far": 2500.0,
-    "dist_min": 500,
-    "dist_max": 10000,
+    "dist_min": 150,
     "min_sampling": 20,
     "max_sampling": 400,
     "cavity_size": 1.0,
     "cavity_dist_max": 50,
     "cavity_surface_tags": [],
-    "cavity_max_diag_mm": 20
+    "cavity_max_diag_mm": 20,
+    "growth_rate": 0.2
   },
   "nose_refinement_parameters": {
     "enable": true,
     "length_fraction": 0.12,
     "lateral_pad_mm": 500,
-    "size_mm": 100.0,
+    "size_mm": 40.0,
     "transition_thickness_mm": 2000
   },
   "shock_box_parameters": {
@@ -65,7 +69,7 @@
     "method": "auto",
     "target_yplus": 0.8,
     "Size": 0.05,
-    "Ratio": 1.1112,
+    "Ratio": 1.2,
     "Thickness": 5.83,
     "NbLayers": 25,
     "max_layers": 200,
