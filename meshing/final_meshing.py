@@ -2067,6 +2067,18 @@ def build_custom_prism_layers(wall_faces, symmetry_faces, farfield_faces,
     passes = 0
     qcuts = np.zeros(nw, dtype=np.int16)
     max_qcuts = int(bl_params.get("max_quality_cuts", 6))
+    # Converging normals at a concave crease squeeze the stack top: a 15 mm
+    # wall edge can end up 3 mm long there, and the tets standing on it
+    # cannot be well shaped. Thinning the column locally undoes the squeeze.
+    squeeze_min = float(bl_params.get("top_edge_shrink_min", 0.4)) \
+        if quality_min > 0 else 0.0
+
+    def _min_edge(q):
+        return np.minimum(np.minimum(
+            np.linalg.norm(q[:, 0] - q[:, 1], axis=1),
+            np.linalg.norm(q[:, 1] - q[:, 2], axis=1)),
+            np.linalg.norm(q[:, 2] - q[:, 0], axis=1))
+    wall_min_edge = _min_edge(xyz[tris])
     wall_poor = np.zeros(tris.shape[0], dtype=bool)
     q_left = 0
     while True:
@@ -2083,6 +2095,8 @@ def build_custom_prism_layers(wall_faces, symmetry_faces, farfield_faces,
                     wall_poor = low
                 else:
                     qbad |= low
+                if k == n and squeeze_min > 0:
+                    qbad |= _min_edge(cur) < squeeze_min * wall_min_edge
             prev = cur
         cut = [np.unique(tris[bad])]
         # poor upper layers: thin those columns, a limited number of times
@@ -2131,7 +2145,7 @@ def build_custom_prism_layers(wall_faces, symmetry_faces, farfield_faces,
         _gradient_limit(t, edges, elen, slope)
         print(f"    pass {passes}: {nbad} folding prism column(s), {nsym} "
               f"folding symmetry triangle(s), {nov} overlapping pair(s), "
-              f"{q_left} column(s) with poor upper layers, "
+              f"{q_left} column(s) with poor or squeezed upper layers, "
               f"thickness cut at {idx.size} node(s)")
     if quality_min > 0:
         print(f"  Prism quality: {int(wall_poor.sum())} column(s) below gamma "
@@ -3625,6 +3639,43 @@ def _undo_cavities(comps):
         c["backup"] = fresh
 
 
+def _merge_cavities(comps):
+    """
+    Move the new tets (and nodes) of accepted cavities into the tet volume
+    their old tets came from, and delete the temporary cavity volumes and
+    surfaces. One tet region is all that ever stays in the model: a cavity
+    volume left behind would be re-meshed by gmsh the moment a later cavity
+    emptied it.
+    """
+    data = []
+    for c in comps:
+        nt, nx, _ = gmsh.model.mesh.getNodes(3, c["vol"], includeBoundary=False)
+        cn = gmsh.model.mesh.getElementsByType(4, c["vol"])[1]
+        data.append((np.asarray(nt, dtype=np.int64).copy(),
+                     np.asarray(nx, dtype=float).copy(),
+                     np.asarray(cn, dtype=np.int64).copy()))
+        gmsh.model.mesh.removeElements(3, c["vol"])
+    try:
+        gmsh.model.geo.remove([(3, c["vol"]) for c in comps])
+        gmsh.model.geo.synchronize()
+    except Exception:
+        pass
+    n = 0
+    for c, (nt, nx, cn) in zip(comps, data):
+        for dt in [(3, c["vol"])] + [(2, s_) for s_ in c["surfs"]]:
+            try:
+                gmsh.model.removeEntities([dt])
+            except Exception:
+                pass
+        home = c["backup"][0][0]
+        if nt.size:
+            gmsh.model.mesh.addNodes(3, home, nt.tolist(), nx.tolist())
+        gmsh.model.mesh.addElementsByType(home, 4, [], cn.tolist())
+        n += cn.size // 4
+        c["vol"], c["surfs"] = None, []
+    return n
+
+
 def _fill_cavities(comps, ctx):
     """
     Remove the tets of the given cavities and fill them again. On failure
@@ -3897,12 +3948,7 @@ def local_tet_repair(defects, state, lr, background, size_far, fluid_name,
               f"not be filled and kept the original tets "
               f"(first: {failed[0].get('error', '')[:160]})")
     if kept:
-        state["tet_volumes"] = vols + [c["vol"] for c in kept]
-        stale = gmsh.model.getPhysicalGroups(3)
-        if stale:
-            gmsh.model.removePhysicalGroups(stale)
-        g_ = gmsh.model.addPhysicalGroup(3, list(prism_volumes) + state["tet_volumes"])
-        gmsh.model.setPhysicalName(3, g_, fluid_name)
+        _merge_cavities(kept)
         print(f"  {len(kept)} cavit{'y' if len(kept) == 1 else 'ies'} re-meshed: "
               f"{n_old} tets removed, {n_new_tets} created "
               f"({n_new_tets - n_old:+d})")
