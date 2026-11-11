@@ -1,0 +1,161 @@
+{
+  "step_file": "D:\\BWB_git\\BWB_Spaceplane\\Design\\BWB_Spaceplane_plain_v4_20261024.brep",
+  "output_file": "D:\\BWB_git\\BWB_Spaceplane\\Output\\BWB_Spaceplane_v4_plain_20261024.msh",
+  "export_geometry_path": "",
+  "gmsh_parameters": {
+    "Mesh.RandomFactor": 1e-05,
+    "General.NumThreads": 16,
+    "Mesh.MeshSizeMin": 0.05,
+    "Mesh.MeshSizeMax": 40000,
+    "Mesh.MeshSizeFromCurvature": 12,
+    "Mesh.Algorithm": 6,
+    "Mesh.Algorithm3D": "auto",
+    "Mesh.Smoothing": 5,
+    "Mesh.Optimize": 1,
+    "Mesh.OptimizeNetgen": 3,
+    "Mesh.OptimizeThreshold": 0.3,
+    "quality_abort_threshold": 0.01,
+    "Mesh.ElementOrder": 1,
+    "Mesh.MshFileVersion": 2.2,
+    "General.Terminal": 1
+  },
+  "_geometry_parameters_comment": "Domain sized for M~10 at 0 deg AoA: 3 m upstream of the nose, 12 m of wake, 30 m laterally, Z -12 to +18 m (body Z 0 to 5.6 m). Check the first solution that the bow shock leaves through the outlet, not the side or top/bottom faces. Re-check if rotation_angle_deg changes.",
+  "geometry_parameters": {
+    "rotation_angle_deg": -5,
+    "rotation_by_CoM": true,
+    "test_for_CoM_only": false,
+    "uniform_dilation_factor": 1.0,
+    "enable_symmetry_half_model": false,
+    "symmetry_plane_y_mm": 0.0,
+    "symmetry_keep_positive_side": true,
+    "far_field_x0_mm": -3000,
+    "far_field_length_mm": 63000,
+    "far_field_face_tolerance_mm": 0.5,
+    "two_stage_half_cut": false,
+    "allow_full_model_fallback": true,
+    "min_cut_volume_fraction": 1e-09,
+    "dump_face_classification": false,
+    "cut_cache_file": "D:\\BWB_git\\BWB_Spaceplane\\Output\\cut_cache_half.brep",
+    "far_field_y_mm": 40000,
+    "far_field_z_min_mm": -12000,
+    "far_field_z_max_mm": 18000
+  },
+  "__old__" : "\"size_field_parameters\": {  \"size_near\": 0.5, \"size_far\": 500, \"dist_min\": 150, \"dist_max\": 25000, \"cavity_size\": 1.0, \"cavity_dist_max\": 50, \"auto_detect_cavity\": true, \"cavity_max_diag_mm\": 20, \"cavity_surface_tags\": []}",
+  "_size_field_parameters_comment": "growth_rate: size rises linearly with wall distance past dist_min, each cell about 20 percent larger than its neighbour; it sets dist_max. Measured on this brep: 20.5M cells (13.4M prisms, 7.1M tets), 6.5 GB RAM.",
+  "size_field_parameters": {
+    "size_near": 500.0,
+    "size_far": 2500.0,
+    "dist_min": 150,
+    "min_sampling": 20,
+    "max_sampling": 400,
+    "cavity_size": 1.0,
+    "cavity_dist_max": 50,
+    "cavity_surface_tags": [],
+    "cavity_max_diag_mm": 10,
+    "growth_rate": 0.2
+  },
+  "nose_refinement_parameters": {
+    "enable": true,
+    "length_fraction": 0.02,
+    "lateral_pad_mm": 500,
+    "size_mm": 40.0,
+    "transition_thickness_mm": 2000
+  },
+  "shock_box_parameters": {
+    "enable": false
+  },
+  "_surface_refinement_boxes_comment": "Each box now only SELECTS wall faces whose bounding box overlaps it, and sizes those faces via a Distance+Threshold field decaying to size_far over dist_max_mm -- it does not size the raw 3D volume inside the box (that version produced a 9e9-tet pre-flight estimate on this body, almost all of it empty far-field volume).",
+  "surface_refinement_boxes": [
+    {
+      "enable": true,
+      "name": "trailing_edge",
+      "XMin": 43000, "XMax": 48400,
+      "YMin": -17600, "YMax": 17600,
+      "ZMin": 1700, "ZMax": 2200,
+      "size_mm": 3.0,
+      "dist_max_mm": 30.0
+    }
+  ],
+  "_boundary_layer_parameters_comment": "target_yplus sets the first cell from freestream_parameters (overrides Size). Ratio is the max growth; the layer count follows from Thickness. Faces up to cavity_max_diag_mm/cavity_surface_tags get cavity_thickness_mm, tapering at thickness_gradient. gap_safety_factor turns on the local wall-to-wall gap cap: each node's thickness is also limited to gap_safety_factor times the distance to the nearest facing wall within gap_search_radius_mm, independent of which face either point is on -- this is what stops two BL stacks colliding across a thin section (e.g. a trailing edge) that a per-face cavity check can't see, since a single large face can still pinch thin locally. Set gap_safety_factor to 0 to disable it and get the old face-only behaviour.",
+  "boundary_layer_parameters": {
+    "enable": true,
+    "method": "custom",
+    "target_yplus": 0.8,
+    "Size": 0.05,
+    "Ratio": 1.1,
+    "Thickness": 8,
+    "NbLayers": 25,
+    "max_layers": 200,
+    "cavity_thickness_mm": 0.5,
+    "thickness_gradient": 0.15,
+    "gap_safety_factor": 0.4,
+    "gap_search_radius_mm": 24.0,
+    "overlap_max_fill": 0.8
+  },
+  "_freestream_parameters_comment": "First cell = smallest of the incompressible estimate and a compressible Eckert reference-temperature estimate (wall properties via Sutherland), over wall temperatures freestream T, 300 K and adiabatic T_aw (or wall_temperature_K if given), at yplus_min_running_length_mm from the leading edge (Cf is highest there). Turbulent Cf throughout, which is above laminar, so laminar regions are covered too. For this case: 0.01097 mm (was 0.0201 mm, exact only at x=48 m, y+ about 0.92 near the nose). Optional: temperature_K, mach, gamma, recovery_factor, wall_temperature_K.",
+  "freestream_parameters": {
+    "velocity_mps": 3180.01,
+    "density_kgm3": 0.00404597,
+    "dynamic_viscosity_pas": 1.6998e-05,
+    "reference_length_mm": 48041.0,
+    "yplus_min_running_length_mm": 10.0
+  },
+  "_auto_refinement_parameters_comment": "Re-meshes until the criteria hold. Failing cells become local size spots (Ball fields at refine_factor x local cell size, grading back at spot_growth_rate, default growth_rate). Inverted cells, folding or overlapping prism stacks and a self-intersecting tet boundary also get local BL thinning (bl_thickness_factor). A spot whose defect count did not drop after tightening is marked stuck. max_yplus is checked per wall node on the mesh as built (the loop may only shrink the first cell). max_prism_aspect_ratio = wall spacing / layer height, met by refining the wall, never by coarsening the first cell; pre-flight prints the resulting prism count and RAM and aborts if over max_element_budget. max_bl_top_jump = wall spacing / top layer height, met by adding layers. max_tet_aspect_ratio = maxEdge / (2 sqrt6 inradius), 1 for a regular tet. Spots are saved to spots_file (default <output>_refinement_spots.json); resume_from_spots_file reuses them. min_prism_gamma: right prism 0.82 at any aspect ratio, 0.14 at 80 deg shear. Non-orthogonality: angle between face normal and the centroid-centroid line. max_volume_ratio 0 disables that check. The 3D check needs roughly 150 bytes per cell on top of gmsh.",
+  "auto_refinement_parameters": {
+    "enable": true,
+    "max_iterations": 5,
+    "max_surface_passes": 3,
+    "criteria": {
+      "max_inverted": 0,
+      "min_tet_sicn": 0.02,
+      "min_pyramid_sicn": 0.01,
+      "min_prism_gamma": 0.1,
+      "max_non_orthogonality_deg": 80.0,
+      "max_volume_ratio": 0,
+      "max_yplus": 1.0,
+      "max_prism_aspect_ratio": 10000,
+      "max_bl_top_jump": 10,
+      "max_tet_aspect_ratio": 15,
+      "min_wall_triangle_gamma": 0.1,
+      "check_boundary_intersections": true,
+      "allowed_bad_cells": 0
+    },
+    "refine_factor": 0.3,
+    "spot_radius_factor": 3.0,
+    "min_spot_size_mm": 1.0,
+    "max_spot_level": 4,
+    "cluster_factor": 2.0,
+    "max_new_spots_per_iteration": 150,
+    "max_total_spots": 400,
+    "bl_thickness_factor": 0.6,
+    "min_bl_thickness_factor": 0.05,
+    "spots_file": "",
+    "resume_from_spots_file": false,
+    "export_if_not_converged": false,
+    "_local_repair_comment": "Defects are fixed in place, on and next to the bad cells, in the mesh already in memory; the geometry is never changed. Wall: poor triangles, over-long edges and isolated short edges are re-triangulated locally (wall_rings neighbours). Prisms: a column with poor upper layers is thinned locally. Tets: the bad tets plus cavity_rings neighbours are removed and only that cavity is filled again at refine_factor x local size. global_remesh_fallback true hands whatever is left to the old whole-mesh loop (max_iterations, refine_factor, spot_radius_factor above); false never re-meshes the whole body.",
+    "local_repair": {
+      "enable": true,
+      "max_iterations": 8,
+      "wall_rings": 2,
+      "max_wall_passes": 4,
+      "short_edge_ratio": 0.15,
+      "cavity_rings": 1,
+      "refine_factor": 0.6,
+      "spot_radius_factor": 1.5,
+      "spot_growth_rate": 0.3,
+      "global_remesh_fallback": false
+    }
+  },
+  "su2_marker_names": {
+    "wall": "wall",
+    "symmetry": "symmetry",
+    "farfield": "farfield"
+  },
+  "utility_parameters": {
+    "su2_dilation_factor": 0.001,
+    "enable_su2_export": true,
+    "surface_mesh_only": false,
+    "max_element_budget": 1.5e8,
+    "abort_on_bad_quality": true
+  }
+}
