@@ -186,8 +186,28 @@ def run(cfg, verbose=True):
                   % (idx + 1, len(modes), modes[order[idx]][0] / 1e3, dt),
                   flush=True)
 
-    local = par.map_modes(len(modes), work, progress=progress)
-    local = [(order[k], r, dt) for k, r, dt in local]
+    nbatch = int(pc.get("batch", 0) or 0)
+    if kind == "lpse" and pc.get("lockstep", False) and nbatch > 0:
+        from .lockstep import LockstepMarcher
+        lm = LockstepMarcher(solver)
+        chunks = [order[k:k + nbatch] for k in range(0, len(order), nbatch)]
+        par.log("pse lockstep batches of %d modes, %d batches"
+                % (nbatch, len(chunks)))
+
+        def work_batch(kb):
+            ids = chunks[kb]
+            rs = lm.march([modes[k] for k in ids], i0=i0, c_guess=cg,
+                          mode_check=check)
+            return [r.to_dict() for r in rs]
+
+        loc = par.map_modes(len(chunks), work_batch)
+        local = []
+        for kb, rs, dt in loc:
+            for k, r in zip(chunks[kb], rs):
+                local.append((k, r, dt / len(rs)))
+    else:
+        local = par.map_modes(len(modes), work, progress=progress)
+        local = [(order[k], r, dt) for k, r, dt in local]
     merged = par.gather_results(local)
     if par.rank == 0:
         path = os.path.join(out["directory"], out["file"])

@@ -1,0 +1,68 @@
+{
+  "case": {
+    "name": "su2_nemo_air7_cone"
+  },
+  "gas": {
+    "library": "su2tclib",
+    "gas_model": "AIR-7",
+    "transport": "WILKE",
+    "frozen": false,
+    "species_order": [
+      "e-",
+      "N2",
+      "O2",
+      "NO",
+      "N",
+      "O",
+      "NO+"
+    ]
+  },
+  "baseflow": {
+    "source": "su2",
+    "su2": {
+      "mesh": "su2_case/mesh.su2",
+      "solution": "su2_case/restart_flow_*.csv",
+      "wall_markers": [
+        "wall"
+      ],
+      "plane": "axisym",
+      "average": "primitive",
+      "s0": 0.0,
+      "station_axis": "s"
+    },
+    "x_start": 0.3,
+    "x_end": 2.0,
+    "n_stations": 171,
+    "ny": 161,
+    "y_max_factor": 4.0,
+    "y_half_factor": 0.5,
+    "smooth_passes": 1
+  },
+  "wall_bc": {
+    "thermal": "isothermal",
+    "vibrational": "isothermal",
+    "catalytic": "noncatalytic"
+  },
+  "analysis": {
+    "type": "lpse"
+  },
+  "modes": {
+    "f_min_hz": 60000.0,
+    "f_max_hz": 300000.0,
+    "n_frequencies": 384
+  },
+  "pse": {
+    "order": 2,
+    "nonparallel": true,
+    "stabilize": 0.0
+  },
+  "parallel": {
+    "group_size": 1,
+    "backend": "gpu",
+    "lockstep": true,
+    "batch": 64
+  },
+  "output": {
+    "directory": "results/su2_nemo_air7"
+  }
+}

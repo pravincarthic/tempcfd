@@ -5,7 +5,7 @@ built-in thermochemistry (SU2TCLib) or Mutation++.  The marching scheme,
 stabilisation, mixed-derivative terms and the NPSE harmonic balance follow
 Krypton (Lacombe, SoftwareX SOFTX-D-22-00069).
 """
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from . import atmosphere, gas, fluxes, jacobians, grid, operators, bcs, lst
 from . import pse, npse, baseflow, gasdynamics, parallel, io, config, su2

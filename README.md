@@ -195,6 +195,23 @@ The device code path is tested with NumPy/SciPy standing in for CuPy; it
 has not been run on an A100 here (no GPU in this environment). Jacobian
 evaluation stays on the CPU (it is now done once per node).
 
+**Lockstep batched march** (`parallel.lockstep = true`, `parallel.batch`):
+a batch of modes is marched station by station together. Each mode's
+operator is assembled directly as node-offset blocks from the shared
+Jacobians; grouping 4 nodes into 48 x 48 super-blocks makes the system
+block tridiagonal, solved by batched banded LU with partial pivoting
+(`pse/batched.py`): a CUDA kernel factors each 96 x 48 pivoting panel
+(one thread block per mode) and the trailing updates are batched FP64
+GEMMs (cuBLAS, A100 tensor cores). Work per solve drops from the dense
+O((ny NV)^3) to O(nb S^3), about 300x less at ny = 161. The same code runs
+with NumPy on the CPU, which is how it is verified: alpha agrees with the
+per-mode march to 1e-11 and the N envelope is identical. The CUDA panel
+kernel checks itself against the array-op version on first use and falls
+back if they disagree. It has not been compiled or run on a GPU here.
+On a CPU the per-mode path with SuperLU is faster; use lockstep with
+`backend = "gpu"`, batch 32-128 per GPU. The LST start of each mode
+(Arnoldi) and the 23 x 23 far-field eigenproblems stay on the host.
+
 `scripts/submit_384.slurm` (CPU), `scripts/submit_a100.slurm` (GPU),
 `scripts/scaling_benchmark.py --backend cpu|gpu [--no-share]`,
 `mpiexec -n 4 python3 tests/mpi_check.py` (Schur solver, scheduler,

@@ -108,6 +108,8 @@ DEFAULTS = {
         "threads": 1,
         "backend": "cpu",              # cpu | gpu (CuPy; A100: dense LU on device)
         "share_jacobians": True,       # base-flow Jacobians once per node
+        "lockstep": False,             # LPSE: march batches of modes together
+        "batch": 32,                   # modes per lockstep batch (GPU: 32-128)
     },
     "output": {
         "directory": "results",

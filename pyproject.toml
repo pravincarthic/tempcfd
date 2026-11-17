@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pse-nemo"
-version = "2.1.0"
+version = "2.2.0"
 description = "LST, LPSE and NPSE for hypersonic boundary layers from SU2-NEMO (AIR-7, TTv), with SU2TCLib or Mutation++ thermochemistry"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.24", "scipy>=1.10"]

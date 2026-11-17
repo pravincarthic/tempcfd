@@ -17,8 +17,9 @@ export PSE_BACKEND=gpu
 # several ranks share each A100 through MPS (one daemon per node)
 srun --ntasks-per-node=1 nvidia-cuda-mps-control -d || true
 
-CFG=${1:-config/su2_nemo_air7.json}
+CFG=${1:-config/su2_nemo_air7_gpu.json}
 OUT=${2:-results/$SLURM_JOB_ID}
+# lockstep batches of 64 modes per rank, all solves on the GPU
 srun --cpu-bind=cores python3 scripts/run_pse.py "$CFG" -o "$OUT"
 
 srun --ntasks-per-node=1 bash -c 'echo quit | nvidia-cuda-mps-control' || true
