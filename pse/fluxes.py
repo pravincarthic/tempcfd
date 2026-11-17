@@ -1,161 +1,236 @@
-"""Conservative state, total (inviscid + viscous) fluxes and sources for the
-11-species two-temperature Navier-Stokes system.
+"""Two-temperature (TTv) multi-species Navier-Stokes system of SU2-NEMO
+(NEMO_NAVIER_STOKES) in body-fitted orthogonal coordinates.
 
-Residual form used by the stability operators:
+Coordinates:  s along the wall (x), n normal to it (y), and z spanwise
+(planar) or z = r*phi (axisymmetric).  Lame factors h_s = h = 1 + kappa n,
+h_n = 1, h_phi = r(s, n).  The residual is written as
 
-    R = dU/dt + dF/dx + dG/dy + dH/dz - S = 0
+    R = dU/dt + d(l F)/ds + dG/dn + dH/dz + E(q, grad q) = 0
 
-with F, G, H functions of (q, dq/dx, dq/dy, dq/dz) and S a function of q only.
-Everything is analytic so that complex-step Jacobians are exact.
+with l = 1/h, F, G, H the physical-component fluxes and E collecting the
+geometric terms of the divergence in orthogonal coordinates, the curvature
+and hoop-stress terms of the momentum equations, -F dl/ds, and minus the
+chemical and vibrational sources.  Gradients are passed as
+
+    qx : d q / ds   (computational; multiplied by l inside),
+    qy : d q / dn,
+    qz : d q / dz   (physical, = i beta(n) q for a Fourier mode).
+
+Viscous fluxes follow CNEMONumerics::GetViscousProjFlux:
+
+    J_s   = -( rho D_s grad Y_s - Y_s sum_k rho D_k grad Y_k )
+    q_tr  = -k_tr grad T - k_ve grad Tve + sum_s J_s h_s
+    q_ve  = -k_ve grad Tve + sum_s J_s e_ve,s
+    tau   = mu (grad u + grad u^T - 2/3 div u I)
+
+Everything is analytic in (q, qx, qy, qz): complex-step Jacobians are exact.
 """
 import numpy as np
-from . import species as sp
-from . import thermo as th
-from . import transport as tp
-from . import chemistry as ch
 
-NS = sp.NS
-NV = th.NV
-I_U, I_V, I_W, I_T, I_TV = th.I_U, th.I_V, th.I_W, th.I_T, th.I_TV
+
+class Metric:
+    """Geometric coefficients at the wall-normal nodes of one station.
+
+    l     : 1/h
+    kap   : kappa / h      (= dh/dn / h)
+    a_s   : l (dr/ds) / r  (0 for planar)
+    a_n   : (dr/dn) / r    (0 for planar)
+    dl_ds : d(1/h)/ds
+    r     : radius (axisymmetric) or None
+    """
+
+    def __init__(self, ny, l=None, kap=None, a_s=None, a_n=None, dl_ds=None,
+                 r=None):
+        one = np.ones(ny)
+        zero = np.zeros(ny)
+        self.ny = ny
+        self.l = one if l is None else np.asarray(l, float)
+        self.kap = zero if kap is None else np.asarray(kap, float)
+        self.a_s = zero if a_s is None else np.asarray(a_s, float)
+        self.a_n = zero if a_n is None else np.asarray(a_n, float)
+        self.dl_ds = zero if dl_ds is None else np.asarray(dl_ds, float)
+        self.r = None if r is None else np.asarray(r, float)
+
+    @property
+    def axisymmetric(self):
+        return self.r is not None
+
+    def broadcast(self, ndim):
+        """Copy whose arrays broadcast against (ny, *extra) arrays."""
+        shp = (self.ny,) + (1,) * (ndim - 1)
+        m = Metric.__new__(Metric)
+        m.ny = self.ny
+        for k in ("l", "kap", "a_s", "a_n", "dl_ds"):
+            setattr(m, k, getattr(self, k).reshape(shp))
+        m.r = None if self.r is None else self.r.reshape(shp)
+        return m
 
 
 class Model:
     """Physics switches shared by base flow and stability operators."""
 
-    def __init__(self, viscous=True, reacting=True, thermal_noneq=True,
-                 Le=1.2, Sc=None, low_T_blend=True, diffusion=True):
+    def __init__(self, gas, viscous=True, diffusion=True,
+                 thermal_noneq=True):
+        self.gas = gas
         self.viscous = viscous
-        self.reacting = reacting
-        self.thermal_noneq = thermal_noneq
-        self.Le = Le
-        self.Sc = Sc
-        self.low_T_blend = low_T_blend
         self.diffusion = diffusion
+        self.thermal_noneq = thermal_noneq
+        self.ns = gas.ns
+        self.nv = gas.nv
+
+    @property
+    def reacting(self):
+        return not self.gas.frozen
 
     def transport(self, rho_s, T, Tv):
-        return tp.mixture(rho_s, T, Tv, Le=self.Le, Sc=self.Sc,
-                          low_T_blend=self.low_T_blend)
+        return self.gas.transport(rho_s, T, Tv)
 
 
-def conservative(q):
-    rho_s, u, v, w, T, Tv = q[:NS], q[I_U], q[I_V], q[I_W], q[I_T], q[I_TV]
-    rho = th.density(rho_s)
-    e = th.energy_internal(rho_s, T, Tv)
-    eve = th.energy_ve(rho_s, Tv)
-    U = [rho_s[s] for s in range(NS)]
-    U.append(rho * u)
-    U.append(rho * v)
-    U.append(rho * w)
-    U.append(rho * (e + 0.5 * (u * u + v * v + w * w)))
-    U.append(rho * eve)
+def _unpack(model, q):
+    g = model.gas
+    return q[:g.ns], q[g.i_u], q[g.i_v], q[g.i_w], q[g.i_T], q[g.i_Tv]
+
+
+def conservative(model, q):
+    """U = [rho_s, rho u, rho v, rho w, rho E, rho Eve]."""
+    g = model.gas
+    rho_s, u, v, w, T, Tv = _unpack(model, q)
+    rho = g.density(rho_s)
+    rE, rEve = g.energies(rho_s, T, Tv)
+    U = [rho_s[s] for s in range(g.ns)]
+    U += [rho * u, rho * v, rho * w,
+          rE + 0.5 * rho * (u * u + v * v + w * w), rEve]
     return U
 
 
-def _gradY(rho_s, dq):
-    rho = th.density(rho_s)
+def _grad_Y(g, rho_s, rho, dq):
     drho = dq[0]
-    for s in range(1, NS):
+    for s in range(1, g.ns):
         drho = drho + dq[s]
-    return [dq[s] / rho - rho_s[s] * drho / rho ** 2 for s in range(NS)]
+    return [dq[s] / rho - rho_s[s] * drho / (rho * rho) for s in range(g.ns)]
 
 
-def fluxes(q, qx, qy, qz, model, trans=None):
-    """Return (F, G, H) as lists of NV entries."""
-    rho_s, u, v, w, T, Tv = q[:NS], q[I_U], q[I_V], q[I_W], q[I_T], q[I_TV]
-    rho = th.density(rho_s)
-    p = th.pressure(rho_s, T, Tv)
-    e = th.energy_internal(rho_s, T, Tv)
-    eve = th.energy_ve(rho_s, Tv)
+def fluxes(model, q, qx, qy, qz, metric, trans=None, with_source=True):
+    """Return (lF, G, H, E) as lists of NV arrays."""
+    g = model.gas
+    ns = g.ns
+    iu, iv, iw, iT, iV = g.i_u, g.i_v, g.i_w, g.i_T, g.i_Tv
+    rho_s, u, v, w, T, Tv = _unpack(model, q)
+    m = metric
+    rho = g.density(rho_s)
+    p = g.pressure(rho_s, T, Tv)
+    rE, rEve = g.energies(rho_s, T, Tv)
     ke = 0.5 * (u * u + v * v + w * w)
-    H0 = e + ke + p / rho
+    rH = rE + rho * ke + p                    # rho * total enthalpy
+    eve_m = rEve / rho
 
-    F = [rho_s[s] * u for s in range(NS)]
-    G = [rho_s[s] * v for s in range(NS)]
-    Hf = [rho_s[s] * w for s in range(NS)]
-    F += [rho * u * u + p, rho * u * v, rho * u * w, rho * H0 * u, rho * eve * u]
-    G += [rho * v * u, rho * v * v + p, rho * v * w, rho * H0 * v, rho * eve * v]
-    Hf += [rho * w * u, rho * w * v, rho * w * w + p, rho * H0 * w, rho * eve * w]
+    # physical gradients
+    gx = [m.l * qx[k] for k in range(g.nv)]
+    gy = [qy[k] for k in range(g.nv)]
+    gz = [qz[k] for k in range(g.nv)]
 
-    if not model.viscous:
-        return F, G, Hf
+    F = [rho_s[s] * u for s in range(ns)]
+    G = [rho_s[s] * v for s in range(ns)]
+    H = [rho_s[s] * w for s in range(ns)]
+    # momentum flux tensor Pi (inviscid part first)
+    Pss = rho * u * u + p
+    Pnn = rho * v * v + p
+    Ppp = rho * w * w + p
+    Psn = rho * u * v
+    Psp = rho * u * w
+    Pnp = rho * v * w
+    Fe = rH * u
+    Ge = rH * v
+    He = rH * w
+    Fv = rho * eve_m * u
+    Gv = rho * eve_m * v
+    Hv = rho * eve_m * w
 
-    mu, ktr, kve, rhoD = model.transport(rho_s, T, Tv) if trans is None else trans
+    if model.viscous:
+        mu, ktr, kve, Ds = model.transport(rho_s, T, Tv) if trans is None \
+            else trans
+        ux, vx, wx = gx[iu], gx[iv], gx[iw]
+        uy, vy, wy = gy[iu], gy[iv], gy[iw]
+        uz, vz, wz = gz[iu], gz[iv], gz[iw]
+        ess = ux + m.kap * v
+        enn = vy
+        epp = wz + m.a_s * u + m.a_n * v
+        esn = 0.5 * (uy - m.kap * u + vx)
+        esp = 0.5 * (wx - m.a_s * w + uz)
+        enp = 0.5 * (wy - m.a_n * w + vz)
+        div = ess + enn + epp
+        lam = -2.0 / 3.0 * mu * div
+        tss = 2.0 * mu * ess + lam
+        tnn = 2.0 * mu * enn + lam
+        tpp = 2.0 * mu * epp + lam
+        tsn = 2.0 * mu * esn
+        tsp = 2.0 * mu * esp
+        tnp = 2.0 * mu * enp
+        Pss = Pss - tss
+        Pnn = Pnn - tnn
+        Ppp = Ppp - tpp
+        Psn = Psn - tsn
+        Psp = Psp - tsp
+        Pnp = Pnp - tnp
+        Fe = Fe - (u * tss + v * tsn + w * tsp) - ktr * gx[iT] - kve * gx[iV]
+        Ge = Ge - (u * tsn + v * tnn + w * tnp) - ktr * gy[iT] - kve * gy[iV]
+        He = He - (u * tsp + v * tnp + w * tpp) - ktr * gz[iT] - kve * gz[iV]
+        Fv = Fv - kve * gx[iV]
+        Gv = Gv - kve * gy[iV]
+        Hv = Hv - kve * gz[iV]
+        if model.diffusion:
+            hs = g.h_species(T, Tv)
+            evs = g.e_ve_species(Tv)
+            Y = [rho_s[s] / rho for s in range(ns)]
+            for gr, flux, kind in ((gx, F, 0), (gy, G, 1), (gz, H, 2)):
+                dY = _grad_Y(g, rho_s, rho, gr)
+                vs = [rho * Ds[s] * dY[s] for s in range(ns)]
+                vsum = vs[0]
+                for s in range(1, ns):
+                    vsum = vsum + vs[s]
+                eh = 0.0
+                ev = 0.0
+                for s in range(ns):
+                    J = -(vs[s] - Y[s] * vsum)
+                    flux[s] = flux[s] + J
+                    eh = eh + J * hs[s]
+                    ev = ev + J * evs[s]
+                if kind == 0:
+                    Fe, Fv = Fe + eh, Fv + ev
+                elif kind == 1:
+                    Ge, Gv = Ge + eh, Gv + ev
+                else:
+                    He, Hv = He + eh, Hv + ev
 
-    ux, vx, wx = qx[I_U], qx[I_V], qx[I_W]
-    uy, vy, wy = qy[I_U], qy[I_V], qy[I_W]
-    uz, vz, wz = qz[I_U], qz[I_V], qz[I_W]
-    div = ux + vy + wz
-    txx = mu * (2.0 * ux - (2.0 / 3.0) * div)
-    tyy = mu * (2.0 * vy - (2.0 / 3.0) * div)
-    tzz = mu * (2.0 * wz - (2.0 / 3.0) * div)
-    txy = mu * (uy + vx)
-    txz = mu * (uz + wx)
-    tyz = mu * (vz + wy)
+    F += [Pss, Psn, Psp, Fe, Fv]
+    G += [Psn, Pnn, Pnp, Ge, Gv]
+    H += [Psp, Pnp, Ppp, He, Hv]
 
-    Tx, Ty, Tz = qx[I_T], qy[I_T], qz[I_T]
-    Vx, Vy, Vz = qx[I_TV], qy[I_TV], qz[I_TV]
-    qhx = -ktr * Tx - kve * Vx
-    qhy = -ktr * Ty - kve * Vy
-    qhz = -ktr * Tz - kve * Vz
-    qvx, qvy, qvz = -kve * Vx, -kve * Vy, -kve * Vz
+    # geometric terms of the divergence (scalar part)
+    ksum = m.kap + m.a_n
+    E = [m.a_s * F[k] + ksum * G[k] - m.dl_ds * F[k] for k in range(g.nv)]
+    # tensor (curvature / hoop) terms of the momentum equations
+    E[iu] = E[iu] + m.kap * Psn - m.a_s * Ppp
+    E[iv] = E[iv] - m.kap * Pss - m.a_n * Ppp
+    E[iw] = E[iw] + m.a_s * Psp + m.a_n * Pnp
 
-    F[I_U] = F[I_U] - txx
-    F[I_V] = F[I_V] - txy
-    F[I_W] = F[I_W] - txz
-    G[I_U] = G[I_U] - txy
-    G[I_V] = G[I_V] - tyy
-    G[I_W] = G[I_W] - tyz
-    Hf[I_U] = Hf[I_U] - txz
-    Hf[I_V] = Hf[I_V] - tyz
-    Hf[I_W] = Hf[I_W] - tzz
-
-    F[I_T] = F[I_T] - (u * txx + v * txy + w * txz) + qhx
-    G[I_T] = G[I_T] - (u * txy + v * tyy + w * tyz) + qhy
-    Hf[I_T] = Hf[I_T] - (u * txz + v * tyz + w * tzz) + qhz
-    F[I_TV] = F[I_TV] + qvx
-    G[I_TV] = G[I_TV] + qvy
-    Hf[I_TV] = Hf[I_TV] + qvz
-
-    if model.diffusion:
-        Jx = tp.diffusion_fluxes(rho_s, _gradY(rho_s, qx), rhoD)
-        Jy = tp.diffusion_fluxes(rho_s, _gradY(rho_s, qy), rhoD)
-        Jz = tp.diffusion_fluxes(rho_s, _gradY(rho_s, qz), rhoD)
-        hs = th.h_all(T, Tv)
-        evs = th.e_ve_all(Tv)
-        ehx = ehy = ehz = 0.0
-        evx = evy = evz = 0.0
-        for s in range(NS):
-            F[s] = F[s] + Jx[s]
-            G[s] = G[s] + Jy[s]
-            Hf[s] = Hf[s] + Jz[s]
-            ehx = ehx + Jx[s] * hs[s]
-            ehy = ehy + Jy[s] * hs[s]
-            ehz = ehz + Jz[s] * hs[s]
-            evx = evx + Jx[s] * evs[s]
-            evy = evy + Jy[s] * evs[s]
-            evz = evz + Jz[s] * evs[s]
-        F[I_T] = F[I_T] + ehx
-        G[I_T] = G[I_T] + ehy
-        Hf[I_T] = Hf[I_T] + ehz
-        F[I_TV] = F[I_TV] + evx
-        G[I_TV] = G[I_TV] + evy
-        Hf[I_TV] = Hf[I_TV] + evz
-
-    return F, G, Hf
+    if with_source:
+        S = source(model, q)
+        E = [E[k] - S[k] for k in range(g.nv)]
+    lF = [m.l * F[k] for k in range(g.nv)]
+    return lF, G, H, E
 
 
-def source(q, model):
-    rho_s, T, Tv = q[:NS], q[I_T], q[I_TV]
-    zero = np.zeros_like(T)
-    S = [zero] * NS + [zero, zero, zero, zero, zero]
-    if not model.reacting:
-        if model.thermal_noneq:
-            w0 = [np.zeros_like(T)] * NS
-            S = list(S)
-            S[I_TV] = ch.source_ve(rho_s, T, Tv, w0, [np.zeros_like(T)] * ch.NR)
-        return S
-    omega, rates = ch.source(rho_s, T, Tv)
-    S = list(omega) + [zero, zero, zero, zero]
-    S.append(ch.source_ve(rho_s, T, Tv, omega, rates)
-             if model.thermal_noneq else zero)
+def source(model, q):
+    g = model.gas
+    rho_s, u, v, w, T, Tv = _unpack(model, q)
+    zero = 0.0 * T
+    S = [zero] * g.nv
+    omega = None
+    if not g.frozen:
+        omega = g.production_rates(rho_s, T, Tv)
+        for s in range(g.ns):
+            S[s] = omega[s]
+    if model.thermal_noneq:
+        S[g.i_Tv] = g.source_ve(rho_s, T, Tv, omega)
     return S

@@ -71,3 +71,16 @@ def write_envelope_csv(path, x, env, fbest, meta=None):
         for i in range(len(x)):
             f.write("%.8e,%.6f,%.6e\n" % (x[i], env[i], fbest[i]))
     return path
+
+
+def save_npse(path, res, meta=None):
+    """NPSE histories: per mode (m,n) alpha, u_max, T_max, p_wall, N."""
+    out = {"meta": json.dumps(meta or {}, default=str),
+           "x": res["x"], "iters": res["iters"], "nl_res": res["nl_res"],
+           "f0_hz": res["f0_hz"], "beta0": res["beta0"],
+           "modes": np.array(res["modes"])}
+    for k in ("alpha", "u_max", "T_max", "p_wall", "N"):
+        for (m, n), v in res[k].items():
+            out["%s_%d_%d" % (k, m, n)] = v
+    np.savez_compressed(path, **out)
+    return path

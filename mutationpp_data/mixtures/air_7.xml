@@ -1,0 +1,15 @@
+<!-- Ionized 7 species air mixture: the SU2-NEMO AIR-7 set.
+     Species order is the SU2 AIR-7 order, so GAS_COMPOSITION is the same
+     list for FLUID_MODEL= SU2_NONEQ (GAS_MODEL= AIR-7) and
+     FLUID_MODEL= MUTATIONPP (GAS_MODEL= air_7). -->
+<mixture mechanism="air7_SU2">
+
+    <species>
+        e- N2 O2 NO N O NO+
+    </species>
+
+    <element_compositions default="air">
+        <composition name="air"> N:0.79, O: 0.21 </composition>
+    </element_compositions>
+
+</mixture>

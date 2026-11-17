@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 import numpy as np                                                 # noqa: E402
 from pse import config as C                                        # noqa: E402
-from pse.driver import build_baseflow, make_solver                 # noqa: E402
+from pse.driver import build_gas, build_baseflow, make_solver      # noqa: E402
 from pse.parallel import Parallel                                  # noqa: E402
 
 
@@ -38,7 +38,7 @@ def main():
         "modes": {"n_frequencies": n_modes},
         "parallel": {"group_size": a.group_size}})
     t_setup = time.time()
-    bf = build_baseflow(cfg, verbose=False)
+    bf = build_baseflow(cfg, build_gas(cfg), verbose=False)
     solver = make_solver(cfg, bf)
     modes = C.mode_list(cfg)
     order = C.schedule_order(modes, cfg["modes"].get("schedule", "center_out"))
@@ -48,9 +48,9 @@ def main():
     t0 = time.time()
 
     def work(kk):
-        f, b = modes[order[kk]]
+        f, b, n_az = modes[order[kk]]
         try:
-            return solver.march(f, b).to_dict()
+            return solver.march(f, b, n_az=n_az).to_dict()
         except Exception:
             return {"x": np.zeros(0)}
 
@@ -67,18 +67,18 @@ def main():
         counts = np.array([s[1] for s in lead])
         wall = max(s[3] for s in stats)
         total = busies.sum()
-        print("ranks               : %d (groups=%d, group_size=%d)"
+        print("ranks %d in %d groups of %d"
               % (par.size, par.n_groups, par.group_size))
-        print("modes               : %d" % len(modes))
-        print("setup time          : %.2f s" % t_setup)
-        print("wall time (sweep)   : %.2f s" % wall)
-        print("aggregate mode time : %.2f s" % total)
-        print("modes/group         : min %d  max %d  mean %.2f"
+        print("modes %d" % len(modes))
+        print("setup time %.2f s" % t_setup)
+        print("sweep wall time %.2f s" % wall)
+        print("aggregate mode time %.2f s" % total)
+        print("modes per group min %d max %d mean %.2f"
               % (counts.min(), counts.max(), counts.mean()))
-        print("busy fraction       : min %.3f  max %.3f"
+        print("busy fraction min %.3f max %.3f"
               % ((busies / wall).min(), (busies / wall).max()))
-        print("scheduler efficiency: %.3f" % (total / (wall * len(lead))))
-        print("throughput          : %.3f modes/s (%.5f per rank)"
+        print("scheduler efficiency %.3f" % (total / (wall * len(lead))))
+        print("throughput %.3f modes per s, %.5f per rank"
               % (len(modes) / wall, len(modes) / wall / par.size))
     return 0
 

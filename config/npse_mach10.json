@@ -1,0 +1,20 @@
+{
+  "case": {"name": "mach10_130kft_cone7_npse"},
+  "baseflow": {"source": "similarity", "x_start": 0.60, "x_end": 0.90,
+               "n_stations": 31, "ny": 121, "wall_temperature": 1000.0},
+  "analysis": {"type": "npse"},
+  "npse": {
+    "f0_hz": 165000.0,
+    "beta0": 0.0,
+    "n_harmonics": 3,
+    "n_spanwise": 0,
+    "amplitudes": {"1,0": 2e-3},
+    "pad": 2,
+    "nl_iter": 15,
+    "nl_tol": 1e-6,
+    "relax": 1.0,
+    "mean_flow_distortion": true
+  },
+  "pse": {"order": 2, "nonparallel": true},
+  "output": {"directory": "results/npse_mach10"}
+}

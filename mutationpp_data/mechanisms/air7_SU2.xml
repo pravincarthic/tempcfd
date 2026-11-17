@@ -1,0 +1,57 @@
+<!--
+AIR-7 mechanism with the rates of SU2-NEMO's built-in AIR-7 model
+(SU2_CFD/src/fluid/CSU2TCLib.cpp, 22 elementary steps written here as 7
+Mutation++ reactions with third-body efficiencies).
+
+Park, JTHT 7(3):385-398, 1993 and Park et al., JTHT 15(1):76-90, 2001.
+
+Mutation++ evaluates the backward rates from its own (RRHO) Gibbs energies,
+not from SU2's Park equilibrium-constant curve fits, and uses its own
+rate-controlling temperatures (sqrt(T Tv) for heavy-impact dissociation),
+so the two libraries agree on the forward rates and differ slightly in the
+backward ones.  Electrons are never third bodies in Mutation++, which matches
+SU2's separate N2 + e- step.
+-->
+<mechanism name="air7_SU2">
+
+    <arrhenius_units A="mol,cm,s,K" E="kcal,mol,K" />
+
+    <!-- SU2 rxn 0-5: 7e21 (molecules, NO+), 3e22 (atoms) -->
+    <reaction formula="N2+M=2N+M">
+        <arrhenius A="7.0E+21" n="-1.6" T="113200.0" />
+        <M>N:4.285714285714286, O:4.285714285714286</M>
+    </reaction>
+
+    <!-- SU2 rxn 21 -->
+    <reaction formula="N2+e-=2N+e-">
+        <arrhenius A="3.0E+24" n="-1.6" T="113200.0" />
+    </reaction>
+
+    <!-- SU2 rxn 6-11: 2e21 (molecules, NO+), 1e22 (atoms) -->
+    <reaction formula="O2+M=2O+M">
+        <arrhenius A="2.0E+21" n="-1.5" T="59500.0" />
+        <M>N:5.0, O:5.0</M>
+    </reaction>
+
+    <!-- SU2 rxn 12-17: 5e15 (molecules, NO+), 1.1e17 (atoms) -->
+    <reaction formula="NO+M=N+O+M">
+        <arrhenius A="5.0E+15" n="0.0" T="75500.0" />
+        <M>N:22.0, O:22.0</M>
+    </reaction>
+
+    <!-- SU2 rxn 18 -->
+    <reaction formula="N2+O=NO+N">
+        <arrhenius A="6.4E+17" n="-1.0" T="38400.0" />
+    </reaction>
+
+    <!-- SU2 rxn 19 -->
+    <reaction formula="NO+O=O2+N">
+        <arrhenius A="8.4E+12" n="0.0" T="19450.0" />
+    </reaction>
+
+    <!-- SU2 rxn 20 -->
+    <reaction formula="N+O=NO++e-">
+        <arrhenius A="5.3E+12" n="0.0" T="31900.0" />
+    </reaction>
+
+</mechanism>

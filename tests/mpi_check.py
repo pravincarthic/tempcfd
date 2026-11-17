@@ -28,7 +28,7 @@ def banded(n, nv, halo=2, seed=0):
 
 def main():
     comm = MPI.COMM_WORLD
-    ny, nv = 61, 16
+    ny, nv = 61, 12
     A = banded(ny, nv)
     b = np.linspace(1.0, 2.0, ny * nv) + 1j
     ref = spla.spsolve(A.tocsc(), b)
@@ -48,7 +48,7 @@ def main():
     ok_sched = comm.bcast(ok_sched, root=0)
 
     if comm.rank == 0:
-        print("ranks=%d  schur_rel_err=%.3e  solve_ok=%s  scheduler_ok=%s"
+        print("ranks %d schur relative error %.3e solve ok %s scheduler ok %s"
               % (comm.size, err, ok_solve, ok_sched))
     return 0 if (ok_solve and ok_sched) else 1
 

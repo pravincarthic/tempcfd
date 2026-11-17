@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=pse-mack2
+#SBATCH --job-name=pse-nemo
 #SBATCH --nodes=8
 #SBATCH --ntasks-per-node=48          # 8 x 48 = 384 MPI ranks
 #SBATCH --cpus-per-task=1

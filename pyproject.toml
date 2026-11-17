@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pse-mack"
-version = "1.0.0"
-description = "Parabolised stability equations for second Mack-mode instabilities in 11-species Park two-temperature air, driven by OpenFOAM v1706 / hy2Foam solutions"
+name = "pse-nemo"
+version = "2.0.0"
+description = "LST, LPSE and NPSE for hypersonic boundary layers from SU2-NEMO (AIR-7, TTv), with SU2TCLib or Mutation++ thermochemistry"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
@@ -13,10 +13,11 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 mpi = ["mpi4py>=3.1"]
 io = ["h5py>=3.8"]
 plot = ["matplotlib>=3.6"]
+mutationpp = ["mutationpp"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
-pse-mack = "pse.driver:main"
+pse-nemo = "pse.driver:main"
 
 [tool.setuptools.packages.find]
 include = ["pse*"]
