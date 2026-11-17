@@ -64,10 +64,10 @@ Reproduced as SU2 has them:
 
 * NO+ carries the NO molar mass: `N + O -> NO+ + e-` creates one electron
   mass per mole.
-* **GUPTA-YOS conductivity**: SU2 writes the partner concentration as
+* **GUPTA-YOS conductivity** (not reproduced by default): SU2 writes the partner concentration as
   `rho_i/(rho M_j)`. With e- present this makes the conductivity 6-10x too
-  small (Pr 4-7 instead of 0.7). Kept by default so the operator matches your base flow; set
-  `gas.gy_partner_bug = false` for the textbook rule. If you ran SU2 with
+  small (Pr 4-7 instead of 0.7). The default uses the textbook rule; set
+  `gas.gy_partner_bug = true` to reproduce SU2 exactly. If you ran SU2 with
   GUPTA-YOS, check your wall heat flux.
 
 Deliberate deviations (scale with Y_NO+ or Y_e-, < 1e-10 here): NO+ gets its

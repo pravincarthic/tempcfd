@@ -21,7 +21,7 @@ DEFAULTS = {
         "species_order": None,         # GAS_COMPOSITION order if not the library's
         "mpp_data_dir": None,          # else $MPP_DATA_DIRECTORY, else bundled
         "transport_fallback": "su2tclib",
-        "gy_partner_bug": True,        # reproduce SU2's Gupta-Yos k mixing rule
+        "gy_partner_bug": False,       # True reproduces SU2's Gupta-Yos k mixing rule
     },
     "baseflow": {
         "source": "similarity",        # similarity | su2

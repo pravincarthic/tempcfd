@@ -67,8 +67,8 @@ def test_transport_prandtl(tr):
 
 def test_gupta_yos_partner_quirk_reproduced():
     T = np.array([1500.0])
-    a = SU2TCLibAir7(transport="GUPTA-YOS")
-    b = SU2TCLibAir7(transport="GUPTA-YOS", gy_partner_bug=False)
+    a = SU2TCLibAir7(transport="GUPTA-YOS", gy_partner_bug=True)
+    b = SU2TCLibAir7(transport="GUPTA-YOS")
     rs = _air(a, n=1)
     ka = sum(a.transport(rs, T, T)[1:3])
     kb = sum(b.transport(rs, T, T)[1:3])

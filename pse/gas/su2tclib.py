@@ -56,7 +56,7 @@ class SU2TCLibAir7(GasModel):
     names = list(DAT.NAMES)
     RU = SU2_RU
 
-    def __init__(self, transport="WILKE", frozen=False, gy_partner_bug=True):
+    def __init__(self, transport="WILKE", frozen=False, gy_partner_bug=False):
         self.MW = DAT.MOLAR_MASS * 1.0e-3                     # kg/mol
         self.MM = DAT.MOLAR_MASS                              # kg/kmol (SU2)
         self.charge = DAT.CHARGE.copy()
@@ -400,8 +400,9 @@ class SU2TCLibAir7(GasModel):
         rho_j/(rho M_j).  With an electron in the mixture the e- partner
         term then scales like 1/sqrt(m_e) whatever the electron density is,
         and k_tr comes out several times too small (Pr ~ 5).  The default
-        reproduces SU2 so that the operator matches the base flow; set
-        gy_partner_bug=False for the textbook Gupta-Yos mixing rule."""
+        uses the textbook Gupta-Yos mixing rule; set gy_partner_bug=True to
+        reproduce SU2 exactly (operator consistent with an SU2 GUPTA-YOS
+        base flow)."""
         rho = self.density(rho_s)
         rho_e = rho_s[self.i_e]
         Na = SU2_NA * 1.0e3
