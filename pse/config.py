@@ -106,6 +106,8 @@ DEFAULTS = {
     "parallel": {
         "group_size": 1,
         "threads": 1,
+        "backend": "cpu",              # cpu | gpu (CuPy; A100: dense LU on device)
+        "share_jacobians": True,       # base-flow Jacobians once per node
     },
     "output": {
         "directory": "results",

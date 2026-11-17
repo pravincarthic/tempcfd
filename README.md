@@ -160,11 +160,45 @@ number the strongly amplified inviscid root is the *supersonic* (radiating,
 c < 1 - 1/M_e) mode, which the trapped-mode filter excludes. Use
 `analysis.type = "lst"` and widen `modes.f_*` to map the band for your case.
 
-## Parallel
+## Parallel and GPU
 
-Unchanged: dynamic RMA mode scheduler, optional wall-normal Schur-complement
-groups (`parallel.group_size`). `scripts/submit_384.slurm`,
-`scripts/scaling_benchmark.py`, `mpirun -n 4 python3 tests/mpi_check.py`.
+* **Mode level**: dynamic MPI-3 RMA work counter, band-centre-first order.
+  Compute loops poke MPI progress (`pse/progress.py`) so the counter on
+  rank 0 is served while rank 0 computes; without this, ranks stalled in
+  `Fetch_and_op` (busy fraction 0.42 at 4 ranks).
+* **Shared base-flow Jacobians** (`parallel.share_jacobians`, default on):
+  every station's Jacobians are computed once per node, split over the
+  node's ranks, into one MPI-3 shared-memory block (~0.4 GB for 121 x 161),
+  instead of once per mode.
+* **Wall-normal level**: `parallel.group_size > 1`, exact Schur-complement
+  solver (CPU).
+
+Measured on a 4-core box, 16 modes, 13 stations, ny = 121:
+
+| ranks | modes/s | per rank | parallel eff. |
+|---|---|---|---|
+| 1 | 0.281 | 0.281 | 1.00 |
+| 2 | 0.563 | 0.281 | 1.00 |
+| 4 | 1.070 | 0.268 | 0.95 |
+
+Before these changes: 0.659 modes/s at 4 ranks (8 modes), 0.453 without
+shared Jacobians. Keep >= 3 modes per rank to limit the scheduling tail.
+
+**GPU (A100 SXM)**: `parallel.backend = "gpu"` (or `PSE_BACKEND=gpu`) moves
+every LU (march solves, Newton, Arnoldi shift-invert) to the device with
+CuPy: the sparse system goes over as CSR and is densified and factored on
+the GPU (complex128 LU of n ~ 2000 in about a millisecond on FP64 tensor
+cores). Rank r uses GPU `local_rank % n_gpus`; run several ranks per GPU
+under MPS (`scripts/submit_a100.slurm`, 8 ranks per A100). Needs
+`pip install cupy-cuda12x`. Use `group_size = 1` with the GPU back end.
+The device code path is tested with NumPy/SciPy standing in for CuPy; it
+has not been run on an A100 here (no GPU in this environment). Jacobian
+evaluation stays on the CPU (it is now done once per node).
+
+`scripts/submit_384.slurm` (CPU), `scripts/submit_a100.slurm` (GPU),
+`scripts/scaling_benchmark.py --backend cpu|gpu [--no-share]`,
+`mpiexec -n 4 python3 tests/mpi_check.py` (Schur solver, scheduler,
+shared Jacobians).
 
 ## Outputs
 

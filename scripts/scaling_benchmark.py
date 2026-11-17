@@ -29,6 +29,9 @@ def main():
     ap.add_argument("--stations", type=int, default=61)
     ap.add_argument("--ny", type=int, default=121)
     ap.add_argument("--group-size", type=int, default=1)
+    ap.add_argument("--backend", default="cpu", choices=("cpu", "gpu"))
+    ap.add_argument("--no-share", action="store_true",
+                    help="recompute base-flow Jacobians per mode")
     a = ap.parse_args()
 
     par = Parallel(group_size=a.group_size)
@@ -39,7 +42,11 @@ def main():
         "parallel": {"group_size": a.group_size}})
     t_setup = time.time()
     bf = build_baseflow(cfg, build_gas(cfg), verbose=False)
-    solver = make_solver(cfg, bf)
+    from pse import backend
+    backend.configure(a.backend, local_rank=par.local_rank)
+    solver = make_solver(cfg, bf, comm=par.group if par.group_size > 1 else None)
+    if not a.no_share:
+        solver.share_jacobians(par)
     modes = C.mode_list(cfg)
     order = C.schedule_order(modes, cfg["modes"].get("schedule", "center_out"))
     t_setup = time.time() - t_setup
@@ -69,7 +76,8 @@ def main():
         total = busies.sum()
         print("ranks %d in %d groups of %d"
               % (par.size, par.n_groups, par.group_size))
-        print("modes %d" % len(modes))
+        print("modes %d backend %s shared jacobians %s"
+              % (len(modes), a.backend, not a.no_share))
         print("setup time %.2f s" % t_setup)
         print("sweep wall time %.2f s" % wall)
         print("aggregate mode time %.2f s" % total)

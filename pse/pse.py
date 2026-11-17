@@ -25,6 +25,8 @@ from . import lst
 from . import operators as op
 from .bcs import BCOperator, WallBC
 from .linalg import make_solver
+from . import backend
+from . import progress
 
 
 class PSEOptions:
@@ -110,8 +112,11 @@ class StationCache:
         self.s = solver
         self.J = {}
         self.keep = keep
+        self.store = None
 
     def jac(self, i):
+        if self.store is not None:
+            return self.store.get(i)
         if i not in self.J:
             q, qx, qy, qz = self.s.station(i)
             o = op.StationOperators(self.s.model, self.s.bf.grid, q, qx, qy,
@@ -146,6 +151,13 @@ class PSESolver:
         self.wallbc = wallbc or WallBC()
         self.opt = options or PSEOptions()
         self.cache = StationCache(self)
+
+    def share_jacobians(self, par=None):
+        """Precompute all station Jacobians once (per node, in shared
+        memory under MPI) and reuse them for every mode."""
+        from .jstore import JacobianStore
+        self.cache.store = JacobianStore(self, par).build()
+        return self.cache.store
 
     # ------------------------------------------------------------ utilities
     def station(self, i):
@@ -257,6 +269,7 @@ class PSESolver:
                                "ellipticity not suppressed (set "
                                "pse.stabilize)" % (dx, bf.x[i]))
             for it in range(opt.alpha_iter):
+                progress.poke()
                 dadx = (a - hist_a[-1]) / dx
                 L0, L1, L2, M0, M1 = ops.coefficients(
                     a, b, omega, nonparallel=opt.nonparallel, dalpha_dx=dadx,
@@ -279,7 +292,7 @@ class PSESolver:
                 bs = scaling.r * rhs
                 sol = (make_solver(As, self.comm, g.ny, self.model.nv).solve(bs)
                        if self.comm is not None
-                       else spla.spsolve(As.tocsc(), bs))
+                       else backend.solve(As, bs))
                 qn = scaling.unscale_vector(sol)
                 dqdx = cb[-1] * qn + past
                 da = -1j * self._inner(qn, dqdx, w2) / self._inner(qn, qn, w2)

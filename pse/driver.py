@@ -18,6 +18,7 @@ from .gasdynamics import taylor_maccoll, oblique_shock
 from .parallel import Parallel
 from .pse import PSESolver, PSEOptions, PSEResult
 from .npse import NPSESolver, NPSEOptions
+from . import backend
 
 
 def edge_conditions(cfg):
@@ -117,6 +118,10 @@ def run(cfg, verbose=True):
     par = Parallel(group_size=int(cfg["parallel"]["group_size"]))
     os.environ.setdefault("OMP_NUM_THREADS", str(cfg["parallel"]["threads"]))
     t0 = time.time()
+    pc = cfg["parallel"]
+    be = backend.configure(pc.get("backend", "cpu"), local_rank=par.local_rank)
+    par.log("pse backend %s on %d ranks, %d per node"
+            % (be["name"], par.size, par.node.size if par.size > 1 else 1))
     gas = build_gas(cfg)
     bf = build_baseflow(cfg, gas, verbose=verbose and par.rank == 0)
     kind = cfg["analysis"]["type"].lower()
@@ -147,6 +152,10 @@ def run(cfg, verbose=True):
         return 0
 
     solver = make_solver(cfg, bf, comm=par.group if par.group_size > 1 else None)
+    if pc.get("share_jacobians", True):
+        tj = time.time()
+        solver.share_jacobians(par)
+        par.log("pse base flow Jacobians shared in %.1f s" % (time.time() - tj))
     modes = cfgmod.mode_list(cfg)
     order = cfgmod.schedule_order(modes, cfg["modes"].get("schedule",
                                                           "center_out"))

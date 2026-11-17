@@ -5,3 +5,4 @@ h5py>=3.8          # optional: HDF5 output (falls back to .npz)
 matplotlib>=3.6    # optional: scripts/plot_results.py
 pytest>=7.0        # optional: test suite
 # mutationpp       # optional: Mutation++ transport for gas.library = mutationpp
+# cupy-cuda12x    # optional: parallel.backend = gpu (A100)

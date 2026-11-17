@@ -47,10 +47,41 @@ def main():
             all(r == i * i for i, r, _ in merged)
     ok_sched = comm.bcast(ok_sched, root=0)
 
+    # node-shared Jacobian store against a serial computation
+    ok_store = True
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import numpy as _np
+        from pse.gas import make_gas
+        from pse import baseflow as bfm, fluxes as fx
+        from pse.pse import PSESolver
+        from pse.atmosphere import freestream
+        from pse.gasdynamics import taylor_maccoll
+        fs = freestream(10.0, z_ft=130000.0)
+        c = taylor_maccoll(10.0, _np.radians(7.0))
+        g = make_gas("su2tclib")
+        bf = bfm.similarity_baseflow(g, _np.linspace(0.6, 0.9, 5),
+                                     c["M_cone"], fs["T"] * c["T_ratio"],
+                                     fs["p"] * c["p_ratio"],
+                                     {"N2": .767, "O2": .233}, Tw=1000.0,
+                                     cone=True, theta_c=_np.radians(7.0),
+                                     ny=61)
+        s = PSESolver(bf, fx.Model(g))
+        st = s.share_jacobians(par)
+        ref = PSESolver(bf, fx.Model(g)).cache.jac(comm.rank % bf.nx)
+        got = st.get(comm.rank % bf.nx)
+        ok_store = all(_np.array_equal(ref[k], got[k]) for k in ref)
+        st.free()
+    except Exception as exc:                                   # noqa
+        print("store check failed", exc)
+        ok_store = False
+    ok_store = comm.allreduce(ok_store, op=MPI.LAND)
+
     if comm.rank == 0:
-        print("ranks %d schur relative error %.3e solve ok %s scheduler ok %s"
-              % (comm.size, err, ok_solve, ok_sched))
-    return 0 if (ok_solve and ok_sched) else 1
+        print("ranks %d schur relative error %.3e solve ok %s scheduler ok %s "
+              "shared jacobians ok %s"
+              % (comm.size, err, ok_solve, ok_sched, ok_store))
+    return 0 if (ok_solve and ok_sched and ok_store) else 1
 
 
 if __name__ == "__main__":

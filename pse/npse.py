@@ -34,6 +34,8 @@ import numpy as np
 import scipy.sparse.linalg as spla
 
 from . import lst
+from . import backend
+from . import progress
 from . import operators as op
 from . import fluxes as fx
 from .pse import PSESolver, PSEOptions, bdf_coefficients
@@ -245,6 +247,7 @@ class NPSESolver(PSESolver):
             it = 0
             res_nl = np.inf
             for it in range(opt.nl_iter):
+                progress.poke()
                 Nst = self.nonlinear_terms(i, state, ops.J, D1)
                 NLT_new = {}
                 for mn, st in state.items():
@@ -299,7 +302,7 @@ class NPSESolver(PSESolver):
                         past = past + cb[k] * hq[-order + k]
                     rhs = -bco.apply_rhs(Mm @ past + NLT[mn])
                     sc = lst.Scaling(self.model, g, q, ue, Te).calibrate(A)
-                    sol = spla.spsolve(sc.apply(A).tocsc(), sc.r * rhs)
+                    sol = backend.solve(sc.apply(A), sc.r * rhs)
                     qn = sc.unscale_vector(sol)
                     change = max(change, np.linalg.norm(qn - st["q"]))
                     st["q"] = qn

@@ -15,6 +15,8 @@ import scipy.linalg as sla
 
 from .constants import CS_H
 from .operators import assemble
+from . import backend
+from . import progress
 
 
 class Scaling:
@@ -78,7 +80,7 @@ def newton_alpha(ops, bcop, alpha0, beta, omega, q0=None, tol=1e-9,
     A = mat(a)
     n = A.shape[0]
     if q0 is None:
-        lu = spla.splu(A.tocsc())
+        lu = backend.factor(A)
         rng = np.random.default_rng(1)
         q = rng.normal(size=n) + 1j * rng.normal(size=n)
         for _ in range(4):
@@ -99,7 +101,7 @@ def newton_alpha(ops, bcop, alpha0, beta, omega, q0=None, tol=1e-9,
         Kb = sps.bmat([[A, (dA @ q)[:, None]],
                        [sps.csr_matrix(c[None, :]), None]], format="csc")
         try:
-            sol = spla.spsolve(Kb, -np.concatenate([r, [rc]]))
+            sol = backend.solve(Kb, -np.concatenate([r, [rc]]))
         except Exception:
             break
         if not np.all(np.isfinite(sol)):
@@ -146,9 +148,15 @@ def spatial_modes(ops, bcop, beta, omega, sigma, k=12, far_alpha=None,
     Z = sps.csr_matrix((n, n), dtype=complex)
     P = sps.bmat([[A0, A1], [Z, I]], format="csc")
     Q = sps.bmat([[Z, -A2], [I, Z]], format="csc")
-    lu = spla.splu((P - sigma * Q).tocsc())
-    OP = spla.LinearOperator((2 * n, 2 * n), matvec=lambda v: lu.solve(Q @ v),
-                             dtype=complex)
+    lu = backend.factor(P - sigma * Q)
+    cnt = [0]
+
+    def mv(v):
+        cnt[0] += 1
+        if cnt[0] % 50 == 0:
+            progress.poke()
+        return lu.solve(Q @ v)
+    OP = spla.LinearOperator((2 * n, 2 * n), matvec=mv, dtype=complex)
     vals, vecs = spla.eigs(OP, k=k, which="LM",
                            v0=np.random.default_rng(0).normal(size=2 * n))
     return sigma + 1.0 / vals, vecs[:n]
@@ -165,7 +173,7 @@ def temporal_modes(ops, bcop, alpha, beta, dense=True, k=30, sigma=None):
         return w[good], V[:, good]
     n = A_a.shape[0]
     M = (1j * Gam).tocsc()
-    lu = spla.splu((A_a - sigma * M).tocsc())
+    lu = backend.factor(A_a - sigma * M)
     OP = spla.LinearOperator((n, n), matvec=lambda v: lu.solve(M @ v),
                              dtype=complex)
     vals, vecs = spla.eigs(OP, k=k, which="LM")

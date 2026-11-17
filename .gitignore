@@ -8,4 +8,3 @@ results/
 *.egg-info/
 build/
 dist/
-*.tar.gz

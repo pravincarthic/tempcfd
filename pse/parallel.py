@@ -86,6 +86,24 @@ class Parallel:
         self.is_leader = self.group_rank == 0
         self._win = None
         self._counter = None
+        if HAVE_MPI and self.size > 1:
+            self.node = self.world.Split_type(MPI.COMM_TYPE_SHARED,
+                                              key=self.rank)
+        else:
+            self.node = _SerialComm()
+        self.local_rank = self.node.rank if self.size > 1 else 0
+
+    def shared_array(self, shape, dtype=np.float64):
+        """One array per node in MPI-3 shared memory (plain array when
+        serial).  Returns (array, window); free the window when done."""
+        if not HAVE_MPI or self.size == 1 or self.node.size == 1:
+            return np.zeros(shape, dtype=dtype), None
+        itemsize = np.dtype(dtype).itemsize
+        nbytes = int(np.prod(shape)) * itemsize if self.node.rank == 0 else 0
+        win = MPI.Win.Allocate_shared(nbytes, itemsize, comm=self.node)
+        buf, _ = win.Shared_query(0)
+        arr = np.ndarray(buffer=buf, dtype=dtype, shape=shape)
+        return arr, win
 
     # ------------------------------------------------------------- scheduler
     def _open_counter(self):
@@ -114,6 +132,10 @@ class Parallel:
         self._win.Unlock(0)
         return int(out[0])
 
+    def poke(self):
+        """Drive MPI progress (serves RMA requests targeting this rank)."""
+        self.world.Iprobe(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG)
+
     def map_modes(self, n_modes, work_fn, progress=None):
         """Run work_fn(index) over 0..n_modes-1 with dynamic scheduling.
 
@@ -122,6 +144,9 @@ class Parallel:
         Returns the list of (index, result, seconds) produced by this rank.
         """
         self._open_counter()
+        from . import progress as _pg
+        if self._win is not None:
+            _pg.set_hook(self.poke)
         out = []
         while True:
             if self.is_leader:
@@ -139,6 +164,7 @@ class Parallel:
                 out.append((idx, r, dt))
                 if progress is not None:
                     progress(idx, dt)
+        _pg.set_hook(None)
         if self._win is not None:
             self.world.Barrier()
             self._win.Free()
